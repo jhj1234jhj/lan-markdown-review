@@ -35,7 +35,7 @@ pnpm start
 1. **导入文档**：拖入 `.md`（可以连同图片文件夹一起拖），或直接粘贴内容；标题默认取第一个 `#` 标题。
 2. **分享**：右上角「分享」给出局域网链接，链接固定到当前版本，评审期间正文不会变。
 3. **批注**：选中正文文字 → 浮出「添加批注」；不选文字可以点「＋ 整体建议」。
-4. **讨论**：在右侧卡片里回复，处理完把批注标为「已解决」，可切换待处理 / 已解决 / 全部。
+4. **讨论**：在右侧卡片里回复，并给每条批注标一个状态：**未批注**（默认，黄色）/ **同意**（绿色）/ **拒绝**（红色）；再点一次当前状态就回到未批注。筛选栏可按三种状态或全部查看。
 5. **上传新版本**：改完文档点「上传新版本」，旧版本从版本下拉里仍可打开。
 6. **导出意见**：导出 Markdown（便于人读）或 JSON（保留定位信息，便于程序处理）。
 
@@ -100,9 +100,9 @@ data/                 运行时数据库（gitignore）
 | GET | `/api/documents/:id/comments?v=` | 指定版本的批注与回复 |
 | POST | `/api/documents/:id/comments` | `{version, body, quote, selectors, sourceLine?}` |
 | GET | `/api/documents/:id/source?v=` | 下载该版本 Markdown |
-| GET | `/api/documents/:id/export?v=&format=md\|json&status=open` | 导出意见 |
+| GET | `/api/documents/:id/export?v=&format=md\|json&status=pending` | 导出意见；`status=pending` 只要未批注的 |
 | GET | `/api/documents/:id/assets/:version/:path` | 随文档导入的图片 |
-| PATCH | `/api/comments/:id` | `{status}` 解决/重开，或 `{body}` 改自己的批注 |
+| PATCH | `/api/comments/:id` | `{status}`：`pending` / `agreed` / `rejected`，或 `{body}` 改自己的批注 |
 | POST | `/api/comments/:id/replies` | `{body}` 回复 |
 
 JSON 导出格式见代码：`schema: "lan-review/1"`，每条批注带 `target.selector`（两个选择器原文）与 `sourcePath`。
@@ -143,6 +143,8 @@ curl -s "http://127.0.0.1:6767/api/service/documents/r7k2m9qd?include=content,co
 ```
 
 短 id 是 8 位、去掉了容易看错的 `0/1/i/l/o`；`/d/r7k2m9qd` 和 `/d/<uuid>` 打开的是同一篇文档。
+
+每条意见都带 `status`：`pending`（未批注）/ `agreed`（同意）/ `rejected`（拒绝），导出的 JSON 原样保留，导出的 Markdown 标题里写成对应中文。文档列表里的 `openCount` 统计的是未批注条数，另有 `agreedCount` / `rejectedCount`。
 
 ## 命令行客户端
 

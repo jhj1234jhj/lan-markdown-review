@@ -30,16 +30,20 @@ test('two reviewers, live notifications, replies, exports, revision isolation an
     const received = await request(app,`/api/documents/${id}/comments?v=1`,'GET',undefined,b); assert.equal(received.body[0].body,'建议补充验收标准。');
     assert.equal((await request(app,`/api/comments/${cid}/replies`,'POST',{body:'同意，我来补充。'},b)).status,201);
     assert.equal((await request(app,`/api/comments/${cid}`,'PATCH',{body:'冒充作者'},b)).status,403);
-    assert.equal((await request(app,`/api/comments/${cid}`,'PATCH',{status:'resolved'},b)).status,200);
-    assert.equal((await request(app,`/api/documents/${id}/export?v=1&format=json&status=open`)).body.comments.length,0);
-    const exported = await request(app,`/api/documents/${id}/export?v=1&format=md`); assert.match(exported.body,/同意，我来补充/); assert.match(exported.body,/已解决/);
+    assert.equal((await request(app,`/api/comments/${cid}`,'PATCH',{status:'agreed'},b)).status,200);
+    assert.equal((await request(app,`/api/documents/${id}/export?v=1&format=json&status=pending`)).body.comments.length,0);
+    let exported = await request(app,`/api/documents/${id}/export?v=1&format=md`); assert.match(exported.body,/同意，我来补充/); assert.match(exported.body,/同意/);
+    assert.equal((await request(app,`/api/comments/${cid}`,'PATCH',{status:'rejected'},b)).status,200);
+    assert.equal((await request(app,`/api/documents/${id}/export?v=1&format=json`)).body.comments[0].status,'rejected');
+    assert.equal((await request(app,`/api/comments/${cid}`,'PATCH',{status:'pending'},b)).status,200);
+    assert.equal((await request(app,`/api/documents/${id}/export?v=1&format=json&status=pending`)).body.comments.length,1);
     const v2 = await request(app,`/api/documents/${id}/revisions`,'POST',{baseVersion:1,filename:'方案.md',markdown:'# 方案\n\n已补充验收标准。'},a); assert.equal(v2.status,201);
     assert.equal((await request(app,`/api/documents/${id}/comments?v=2`)).body.length,0);
     assert.equal((await request(app,`/api/documents/${id}/comments?v=1`)).body.length,1);
     assert.equal((await request(app,`/api/documents/${id}/revisions`,'POST',{baseVersion:1,markdown:'错误并发覆盖'},b)).status,409);
     sse.abort(); await reader.cancel().catch(()=>{}); reader=null;
     await app.close(); app = await launch(dir);
-    const persisted = await request(app,`/api/documents/${id}/comments?v=1`); assert.equal(persisted.body[0].replies[0].author,'审阅者乙');
+    const persisted = await request(app,`/api/documents/${id}/comments?v=1`); assert.equal(persisted.body[0].replies[0].author,'审阅者乙'); assert.equal(persisted.body[0].status,'pending');
     assert.equal((await request(app,`/api/documents/${id}?v=2`)).body.revision.markdown,'# 方案\n\n已补充验收标准。');
     assert.equal((await request(app,'/api/info','GET',undefined,a)).body.user.name,'审阅者甲');
   } finally { sse?.abort(); if (reader) await reader.cancel().catch(()=>{}); await app.close(); }
@@ -97,6 +101,7 @@ test('service API: token auth, short ids, submit/fetch, filters and revision own
     const withComments = await request(app, `/api/service/documents/${created.body.shortId}?include=comments`);
     assert.equal(withComments.body.comments.length, 1);
     assert.equal(withComments.body.comments[0].body, '建议补充验收标准。');
+    assert.equal(withComments.body.comments[0].status, 'pending');
     assert.equal(withComments.body.content, undefined);
 
     const v2 = await request(app, `/api/service/documents/${created.body.shortId}/revisions`, 'POST',

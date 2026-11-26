@@ -49,7 +49,7 @@
       </main>
       <aside class="review-pane" aria-label="批注和讨论">
         <div class="review-heading"><h2>批注与讨论 <span id="comment-total">0</span></h2><button id="page-comment" class="text-button">＋ 整体建议</button></div>
-        <div class="comment-filters" role="group" aria-label="筛选批注"><button data-filter="open" class="active">待处理 <span id="open-count">0</span></button><button data-filter="resolved">已解决 <span id="resolved-count">0</span></button><button data-filter="all">全部</button></div>
+        <div class="comment-filters" role="group" aria-label="筛选批注"><button data-filter="pending" class="active">未批注 <span id="pending-count">0</span></button><button data-filter="agreed">同意 <span id="agreed-count">0</span></button><button data-filter="rejected">拒绝 <span id="rejected-count">0</span></button><button data-filter="all">全部</button></div>
         <div id="comments" class="comments"></div>
         <div class="review-footer">意见集中在这里，讨论与原文保持关联。</div>
       </aside>
@@ -67,7 +67,7 @@
 
 <dialog id="share-dialog" class="modal compact"><div class="modal-heading"><h2>邀请同事一起评审</h2><button data-close class="close-button" aria-label="关闭">×</button></div><p class="muted">同事连接同一个局域网，在 Chrome 打开下面的链接即可。</p><label for="share-url">当前文档与版本</label><input id="share-url" readonly><div class="share-detail"><strong id="share-version"></strong><span>链接固定到当前版本，避免评审时正文变化。</span></div><p class="helper">请保持这台电脑和共阅服务运行。</p><div class="modal-actions"><button class="button primary" id="copy-share">复制链接</button></div></dialog>
 
-<dialog id="export-dialog" class="modal compact"><div class="modal-heading"><h2>导出评审意见</h2><button data-close class="close-button" aria-label="关闭">×</button></div><p class="muted">包含引用原文、批注作者、讨论回复和处理状态，可交给 Codex 继续修改。</p><label for="export-scope">导出范围</label><select id="export-scope"><option value="open">当前版本 · 待处理意见</option value="all">当前版本 · 全部意见</option></select><div class="export-options"><a id="export-markdown" class="export-option" href="#"><strong>Markdown 文档 <span>推荐</span></strong><small>方便阅读，直接交给 Codex</small></a><a id="export-json" class="export-option" href="#"><strong>JSON 数据</strong><small>保留文字定位信息，便于程序处理</small></a></div></dialog>
+<dialog id="export-dialog" class="modal compact"><div class="modal-heading"><h2>导出评审意见</h2><button data-close class="close-button" aria-label="关闭">×</button></div><p class="muted">包含引用原文、批注作者、讨论回复和处理状态，可交给 Codex 继续修改。</p><label for="export-scope">导出范围</label><select id="export-scope"><option value="pending">当前版本 · 未批注意见</option><option value="all">当前版本 · 全部意见</option></select><div class="export-options"><a id="export-markdown" class="export-option" href="#"><strong>Markdown 文档 <span>推荐</span></strong><small>方便阅读，直接交给 Codex</small></a><a id="export-json" class="export-option" href="#"><strong>JSON 数据</strong><small>保留文字定位信息，便于程序处理</small></a></div></dialog>
 
 <dialog id="about-dialog" class="modal compact"><div class="modal-heading"><h2>共阅 · 局域网文档评审</h2><button data-close class="close-button" aria-label="关闭">×</button></div><p>导入 Markdown → 分享链接 → 划词批注 → 讨论处理 → 导出意见。</p><p class="muted">文档和批注保存在服务器电脑。每次上传新版本都会保留旧正文及其批注；批注不会自动迁移到新版本。</p><p class="muted">姓名不是身份认证，能访问此服务的局域网成员可以阅读和参与评审。</p><p class="helper">文字定位采用 Hypothesis 开源组件；本地协作服务与界面为独立实现，不连接 Hypothesis 云服务。</p></dialog>
 </body></html>

@@ -166,10 +166,13 @@ def cmd_comments(args):
     if args.json:
         print(json.dumps({"document": {k: v for k, v in document.items() if k != "comments"}, "comments": comments}, ensure_ascii=False, indent=2))
         return
-    open_count = sum(1 for c in comments if c["status"] == "open")
-    print(f"{document['title']} · v{document['version']} · 共 {len(comments)} 条意见（待处理 {open_count}）")
+    labels = {"pending": "未批注", "agreed": "同意", "rejected": "拒绝"}
+    counts = {"pending": 0, "agreed": 0, "rejected": 0}
+    for comment in comments:
+        counts[comment["status"]] = counts.get(comment["status"], 0) + 1
+    print(f"{document['title']} · v{document['version']} · 共 {len(comments)} 条意见（未批注 {counts['pending']} · 同意 {counts['agreed']} · 拒绝 {counts['rejected']}）")
     for index, comment in enumerate(comments, 1):
-        status = "待处理" if comment["status"] == "open" else "已解决"
+        status = labels.get(comment["status"], comment["status"])
         quote = (comment.get("quote") or "").replace("\n", " ")
         if len(quote) > 60:
             quote = quote[:60] + "…"
@@ -199,7 +202,7 @@ def cmd_list(args):
     if not documents:
         print("没有匹配的文档")
         return
-    print(f"{'短 id':10} {'版本':4} {'待处理':6} {'更新':12} {'账号':14} 标题")
+    print(f"{'短 id':10} {'版本':4} {'未批注':6} {'更新':12} {'账号':14} 标题")
     for doc in documents:
         owner = doc["owner"].get("account") or doc["owner"].get("name") or "-"
         print(f"{doc['shortId']:10} v{doc['latest']:<3} {doc['openCount']:<6} {human_time(doc['updated']):12} {owner[:14]:14} {doc['title']}")

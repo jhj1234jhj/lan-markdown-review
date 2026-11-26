@@ -2,7 +2,7 @@ import { renderDocument, escapeHTML as esc } from './render.js';
 import { describeSelection, anchorComment } from './anchoring.js';
 
 const $ = id => document.getElementById(id);
-const state = { user: null, documents: [], doc: null, version: null, comments: [], filter: 'open', selected: null, ranges: new Map(), addresses: [], stream: null, pending: null, importMode: 'new', files: [], sourceFile: null, loading: 0, replies: new Set() };
+const state = { user: null, documents: [], doc: null, version: null, comments: [], filter: 'pending', selected: null, ranges: new Map(), addresses: [], stream: null, pending: null, importMode: 'new', files: [], sourceFile: null, loading: 0, replies: new Set() };
 let toastTimer, onIdentity, exportEditing = null;
 const date = value => new Date(value).toLocaleString('zh-CN', { month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false });
 const shortDate = value => new Date(value).toLocaleDateString('zh-CN', { month:'long',day:'numeric' });
@@ -51,14 +51,14 @@ async function openDocument(id, version, { replace = false } = {}) {
   if (token !== state.loading) return;
   state.stream?.close(); state.doc = doc; state.version = doc.revision.version; state.comments = []; state.ranges.clear(); state.selected = null; state.replies.clear();
   clearSelection();
-  for (const name of ['review-open','review-resolved','review-active']) CSS.highlights?.delete(name);
+  for (const name of ['review-pending','review-agreed','review-rejected','review-open','review-resolved','review-active']) CSS.highlights?.delete(name);
   const path = `/d/${doc.short_id || doc.id}?v=${state.version}`;
   history[replace ? 'replaceState' : 'pushState']({}, '', path);
   document.title = `${doc.title} · 共阅`;
   $('toolbar-title').textContent = doc.title; $('document-title').textContent = doc.title;
   $('document-filename').textContent = doc.filename; $('document-date').textContent = `${shortDate(doc.revision.created)} · ${doc.revision.author}`;
   $('download-source').href = `/api/documents/${id}/source?v=${state.version}`;
-  $('version-select').innerHTML = doc.versions.map(v => `<option value="${v.version}"${v.version === state.version ? ' selected' : ''}>v${v.version}${v.version === doc.latest ? ' · 最新版本' : ''}${v.open_count ? ` · ${v.open_count} 条待处理` : ''}</option>`).join('');
+  $('version-select').innerHTML = doc.versions.map(v => `<option value="${v.version}"${v.version === state.version ? ' selected' : ''}>v${v.version}${v.version === doc.latest ? ' · 最新版本' : ''}${v.open_count ? ` · ${v.open_count} 条未批注` : ''}</option>`).join('');
   $('version-notice').hidden = state.version === doc.latest;
   $('version-notice').textContent = `你正在查看 v${state.version}。最新为 v${doc.latest}，可通过版本菜单切换；本页批注属于 v${state.version}。`;
   $('reading-pane').scrollTop = 0; renderLibrary(); renderComments();
@@ -94,10 +94,25 @@ async function loadComments() {
   if (state.doc?.id !== id || state.version !== v) return;
   state.comments = comments; updateHighlights(); renderComments();
 }
+const STATUS = {
+  pending: { label: '未批注', className: 'status-pending', highlight: 'review-pending' },
+  agreed: { label: '同意', className: 'status-agreed', highlight: 'review-agreed' },
+  rejected: { label: '拒绝', className: 'status-rejected', highlight: 'review-rejected' },
+};
+const statusOf = status => STATUS[status] || STATUS.pending;
 function updateHighlights() {
-  state.ranges.clear(); const open = [], resolved = [];
-  for (const c of state.comments) { const range = anchorComment($('document-content'), c); if (range) { state.ranges.set(c.id, range); (c.status === 'resolved' ? resolved : open).push(range); } }
-  if (CSS.highlights) { CSS.highlights.set('review-open', new Highlight(...open)); CSS.highlights.set('review-resolved', new Highlight(...resolved)); CSS.highlights.set('review-active', new Highlight(...(state.ranges.has(state.selected) ? [state.ranges.get(state.selected)] : []))); }
+  state.ranges.clear();
+  const buckets = { pending: [], agreed: [], rejected: [] };
+  for (const c of state.comments) {
+    const range = anchorComment($('document-content'), c);
+    if (!range) continue;
+    state.ranges.set(c.id, range);
+    buckets[buckets[c.status] ? c.status : 'pending'].push(range);
+  }
+  if (CSS.highlights) {
+    for (const [key, ranges] of Object.entries(buckets)) CSS.highlights.set(STATUS[key].highlight, new Highlight(...ranges));
+    CSS.highlights.set('review-active', new Highlight(...(state.ranges.has(state.selected) ? [state.ranges.get(state.selected)] : [])));
+  }
 }
 const avatar = name => `<span class="avatar">${esc(name?.slice(0, 1) || '?')}</span>`;
 function renderComments() {
@@ -105,18 +120,25 @@ function renderComments() {
   const active = document.activeElement?.closest('.reply-form');
   const focus = active ? { id: active.dataset.id, start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd } : null;
   const scroll = $('comments').scrollTop;
-  const open = state.comments.filter(c => c.status === 'open').length;
-  $('open-count').textContent = open; $('resolved-count').textContent = state.comments.length - open; $('comment-total').textContent = state.comments.length;
+  const counts = { pending: 0, agreed: 0, rejected: 0 };
+  for (const c of state.comments) if (counts[c.status] !== undefined) counts[c.status] += 1;
+  $('pending-count').textContent = counts.pending;
+  $('agreed-count').textContent = counts.agreed;
+  $('rejected-count').textContent = counts.rejected;
+  $('comment-total').textContent = state.comments.length;
   document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === state.filter));
   const comments = state.comments.filter(c => state.filter === 'all' || c.status === state.filter);
-  $('comments').innerHTML = comments.length ? comments.map(c => `<section class="comment-card ${c.status === 'resolved' ? 'resolved' : ''} ${c.id === state.selected ? 'active' : ''}" data-id="${c.id}" id="comment-${c.id}">
-    <div class="comment-author">${avatar(c.author)}<strong>${esc(c.author)}</strong><time title="${esc(c.created)}">${date(c.created)}</time></div>
+  $('comments').innerHTML = comments.length ? comments.map(c => {
+    const info = statusOf(c.status);
+    return `<section class="comment-card ${info.className} ${c.id === state.selected ? 'active' : ''}" data-id="${c.id}" id="comment-${c.id}">
+    <div class="comment-author">${avatar(c.author)}<strong>${esc(c.author)}</strong><span class="status-pill ${info.className}">${info.label}</span><time title="${esc(c.created)}">${date(c.created)}</time></div>
     ${c.quote ? `<button class="quote-button" data-action="locate">${esc(c.quote)}</button>${!state.ranges.has(c.id) ? '<div class="orphan-label">原文暂无法定位，已保留引用</div>' : ''}` : '<span class="page-note-label">整体建议</span>'}
     <div class="comment-body">${esc(c.body)}</div>
-    <div class="comment-actions"><button data-action="reply">回复${c.replies.length ? ` (${c.replies.length})` : ''}</button>${c.author_id === state.user?.id ? '<button data-action="edit">编辑</button>' : ''}<button data-action="resolve" class="resolve-button">${c.status === 'resolved' ? '✓ 已解决 · 重新打开' : '✓ 标为已解决'}</button></div>
+    <div class="comment-actions"><button data-action="reply">回复${c.replies.length ? ` (${c.replies.length})` : ''}</button>${c.author_id === state.user?.id ? '<button data-action="edit">编辑</button>' : ''}<span class="status-actions" role="group" aria-label="批注状态"><button data-action="status" data-status="agreed" class="status-button approve${c.status === 'agreed' ? ' on' : ''}" aria-pressed="${c.status === 'agreed'}">同意</button><button data-action="status" data-status="rejected" class="status-button reject${c.status === 'rejected' ? ' on' : ''}" aria-pressed="${c.status === 'rejected'}">拒绝</button><button data-action="status" data-status="pending" class="status-button pending${c.status === 'pending' ? ' on' : ''}" aria-pressed="${c.status === 'pending'}">未批注</button></span></div>
     ${c.replies.length ? `<div class="reply-list">${c.replies.map(r => `<div class="reply"><div class="comment-author">${avatar(r.author)}<strong>${esc(r.author)}</strong><time>${date(r.created)}</time></div><div class="comment-body">${esc(r.body)}</div></div>`).join('')}</div>` : ''}
     ${state.replies.has(c.id) ? `<form class="reply-form" data-id="${c.id}"><textarea aria-label="回复 ${esc(c.author)}" placeholder="回复 ${esc(c.author)}……" maxlength="20000" rows="2" required>${esc(drafts.get(c.id) || '')}</textarea><button class="button primary" type="submit">发送回复</button></form>` : ''}
-  </section>`).join('') : `<div class="empty-comments"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M9 8h30v24H23L9 41V8Z"/><path d="M17 17h14M17 24h9"/></svg><strong>${state.filter === 'resolved' ? '还没有已解决的批注' : state.comments.length ? '当前没有待处理的意见' : '让讨论从一句话开始'}</strong><span>${state.filter === 'resolved' ? '处理完意见后，可将批注标记为已解决。' : '选中正文中的文字，添加你的第一条批注。<br>也可以提出一条整体建议。'}</span></div>`;
+  </section>`;
+  }).join('') : `<div class="empty-comments"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M9 8h30v24H23L9 41V8Z"/><path d="M17 17h14M17 24h9"/></svg><strong>${state.comments.length ? `没有「${state.filter === 'all' ? '全部' : statusOf(state.filter).label}」的批注` : '让讨论从一句话开始'}</strong><span>${state.comments.length ? '换个筛选条件，或在批注卡片上点「同意 / 拒绝 / 未批注」。' : '选中正文中的文字，添加你的第一条批注。<br>也可以提出一条整体建议。'}</span></div>`;
   if (focus) { const field = $('comments').querySelector(`.reply-form[data-id="${focus.id}"] textarea`); field?.focus({ preventScroll:true }); field?.setSelectionRange(focus.start, focus.end); }
   $('comments').scrollTop = scroll;
 }
@@ -252,7 +274,7 @@ $('comment-form').addEventListener('submit', run(async e => {
   e.preventDefault(); await busyForm(e.currentTarget, async () => {
     const pending = state.pending, editing = exportEditing;
     const result = editing ? await api(`/api/comments/${editing.id}`, { method:'PATCH', body:{ body:$('comment-body').value } }) : await api(`/api/documents/${pending.docId}/comments`, { method:'POST', body:{ body:$('comment-body').value, quote:pending.quote, selectors:pending.selectors, version:pending.version, sourceLine:pending.sourceLine } });
-    $('comment-dialog').close(); state.filter = editing?.status || 'open'; await loadComments(); await loadLibrary(); focusComment(editing?.id || result.id, false); toast(editing ? '批注已更新' : '批注已发布，同事可以实时看到');
+    $('comment-dialog').close(); state.filter = editing?.status || 'pending'; await loadComments(); await loadLibrary(); focusComment(editing?.id || result.id, false); toast(editing ? '批注已更新' : '批注已发布，同事可以实时看到');
   });
 }));
 $('comments').addEventListener('click', run(async e => {
@@ -263,7 +285,15 @@ $('comments').addEventListener('click', run(async e => {
   withUser(async () => {
     if (button.dataset.action === 'reply') { state.replies.add(c.id); renderComments(); $(`comment-${c.id}`).querySelector('textarea').focus(); }
     if (button.dataset.action === 'edit') openComment({ ...c, docId:c.doc_id, range:state.ranges.get(c.id) }, c);
-    if (button.dataset.action === 'resolve') { button.disabled = true; try { await api(`/api/comments/${c.id}`, { method:'PATCH', body:{ status:c.status === 'open' ? 'resolved' : 'open' } }); await loadComments(); await loadLibrary(); toast(c.status === 'open' ? '已标为解决' : '批注已重新打开'); } finally { button.disabled = false; } }
+    if (button.dataset.action === 'status') {
+      const next = button.dataset.status === c.status ? 'pending' : button.dataset.status;
+      button.disabled = true;
+      try {
+        await api(`/api/comments/${c.id}`, { method:'PATCH', body:{ status: next } });
+        await loadComments(); await loadLibrary();
+        toast(next === 'agreed' ? '已标记为同意' : next === 'rejected' ? '已标记为拒绝' : '已改回未批注');
+      } finally { button.disabled = false; }
+    }
   });
 }));
 $('comments').addEventListener('submit', run(async e => {

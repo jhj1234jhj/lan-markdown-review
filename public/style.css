@@ -17,3 +17,23 @@
 .document-link{flex-wrap:wrap}
 .document-link .doc-name{flex:1;min-width:0}
 .doc-meta{flex-basis:100%;margin-left:28px;margin-top:-3px;font-size:11px;color:#98a2b4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* 批注三态：未批注 / 同意 / 拒绝 */
+.status-pill{font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+.status-pill.status-pending{background:#fdf3d7;color:#8a6d1f;border-color:#f2e2b0}
+.status-pill.status-agreed{background:#e4f6ea;color:#1f7a43;border-color:#c3e8d0}
+.status-pill.status-rejected{background:#fde8e8;color:#a13a3a;border-color:#f4c9c9}
+.comment-card.status-agreed{border-left:3px solid #34a35e}
+.comment-card.status-rejected{border-left:3px solid #d05a5a}
+.comment-card.status-pending{border-left:3px solid #e0b64a}
+.status-actions{display:inline-flex;border:1px solid #e2e7f0;border-radius:6px;overflow:hidden;margin-left:auto}
+.status-button{border:0;border-radius:0;background:#fff;color:#7b879c;font-size:12px;padding:4px 8px;min-height:0}
+.status-button+.status-button{border-left:1px solid #eef1f7}
+.status-button:hover{background:#f6f8fc}
+.status-button.approve.on{background:#e4f6ea;color:#1f7a43;font-weight:600}
+.status-button.reject.on{background:#fde8e8;color:#a13a3a;font-weight:600}
+.status-button.pending.on{background:#fdf3d7;color:#8a6d1f;font-weight:600}
+.comment-filters{gap:12px;overflow-x:auto}
+::highlight(review-pending){background:#f8e4a4;color:inherit}
+::highlight(review-agreed){background:#cdebd8;color:inherit}
+::highlight(review-rejected){background:#f6cfcf;color:inherit}
