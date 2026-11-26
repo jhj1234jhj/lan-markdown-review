@@ -14,6 +14,19 @@
     <a class="brand" href="/" aria-label="共阅首页"><span class="brand-mark">共</span><span>共阅<small>一起审阅，更进一步</small></span></a>
     <button class="button primary import-button" id="import-document"><span aria-hidden="true">＋</span> 导入文档</button>
     <label class="search-box"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="document-search" type="search" placeholder="查找文档" aria-label="查找文档"></label>
+    <div class="library-filters">
+      <label class="filter-field" for="owner-filter"><span class="sr-only">按账号过滤</span>
+        <select id="owner-filter" aria-label="按账号过滤"><option value="">全部账号</option></select>
+      </label>
+      <label class="filter-field" for="time-filter"><span class="sr-only">按时间过滤</span>
+        <select id="time-filter" aria-label="按时间过滤">
+          <option value="">全部时间</option>
+          <option value="1">今天</option>
+          <option value="7">近 7 天</option>
+          <option value="30">近 30 天</option>
+        </select>
+      </label>
+    </div>
     <div class="sidebar-label">团队文档 <span id="document-count">0</span></div>
     <nav class="document-list" id="document-list" aria-label="文档列表"></nav>
     <div class="outline-section"><div class="sidebar-label">本文目录</div><nav id="outline" class="outline" aria-label="本文目录"></nav></div>

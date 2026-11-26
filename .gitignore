@@ -5,3 +5,5 @@ qa/browser-qa-data/
 qa/.cache/
 *.log
 service.pid
+__pycache__/
+*.pyc

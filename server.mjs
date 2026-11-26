@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { randomUUID, randomBytes, createHash } from 'node:crypto';
+import { randomUUID, randomBytes, createHash, randomInt } from 'node:crypto';
 import { mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, resolve, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +17,10 @@ const text = (value, label, max = 20000) => {
 };
 const STARTER = '# 欢迎来到共阅\n\n让每一条建议，都回到它所指的那句话。\n\n## 开始一轮评审\n\n1. 点击左侧 **导入文档**，选择 Codex 生成的 Markdown 文件。\n2. 点击右上角 **分享**，把局域网链接发给同事。\n3. 在正文中选中一句话，点击 **添加批注**，写下问题或建议。\n4. 在右侧回复、讨论；确认处理后将批注标为已解决。\n5. 点击 **导出意见**，将整理好的反馈交给 Codex。\n\n## 试着批注这句话\n\n第一版应支持多人在同一份文档上讨论，并保留每一条修改建议。\n\n你可以选中上面任意文字，提出一个问题。选中的文字会高亮，点击高亮可以回到讨论。\n\n## 文档修改后怎么处理\n\n用 **上传新版本** 提交修改后的 Markdown。每个版本独立保存正文和批注，旧版本仍可打开；新版本不会自动继承旧批注，避免建议错位。\n\n| 功能 | 用法 |\n| --- | --- |\n| 段落批注 | 选中文字后添加批注 |\n| 整体建议 | 点击右侧“整体建议” |\n| 回复讨论 | 点击批注卡片中的回复 |\n| 导出意见 | 导出 Markdown 或 JSON |\n\n## 代码和图示\n\n```javascript\nconst review = { document: "方案.md", version: 1 };\nconsole.log("一起把文档审得更清楚", review);\n```\n\n```mermaid\nflowchart LR\n  A[生成文档] --> B[团队批注]\n  B --> C[汇总意见]\n  C --> D[修订文档]\n```\n\n## 局域网使用\n\n所有文档和批注保存在启动服务的电脑上。协作成员填写姓名即可参与；请保持服务运行，并让电脑连接同一个局域网。\n';
 
+// 对外短 id：去掉容易看错的 0/1/i/l/o，8 位足够一个团队用。
+const SHORT_ALPHABET = '23456789abcdefghjkmnpqrstuvwxyz';
+const makeShortId = () => Array.from({ length: 8 }, () => SHORT_ALPHABET[randomInt(SHORT_ALPHABET.length)]).join('');
+
 export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 'data'), seed = true } = {}) {
   mkdirSync(dataDir, { recursive: true });
   const db = new DatabaseSync(join(dataDir, 'review.sqlite'));
@@ -32,8 +36,30 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
     CREATE INDEX IF NOT EXISTS replies_comment ON replies(comment_id);`);
   const subscribers = new Map();
   const stmt = sql => db.prepare(sql);
+  // 就地迁移：老库没有账号、token、短 id、owner 字段，启动时补齐并回填短 id。
+  const tableColumns = table => stmt(`PRAGMA table_info(${table})`).all().map(row => row.name);
+  for (const [table, column, ddl] of [
+    ['users', 'account', 'ALTER TABLE users ADD COLUMN account TEXT'],
+    ['users', 'token_hash', 'ALTER TABLE users ADD COLUMN token_hash TEXT'],
+    ['documents', 'short_id', 'ALTER TABLE documents ADD COLUMN short_id TEXT'],
+    ['documents', 'owner_id', 'ALTER TABLE documents ADD COLUMN owner_id TEXT REFERENCES users(id)'],
+  ]) if (!tableColumns(table).includes(column)) db.exec(ddl);
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS users_account ON users(account) WHERE account IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS documents_short ON documents(short_id) WHERE short_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS documents_owner ON documents(owner_id);`);
+  const uniqueShortId = () => {
+    for (;;) {
+      const id = makeShortId();
+      if (!stmt('SELECT 1 FROM documents WHERE short_id=?').get(id)) return id;
+    }
+  };
+  for (const row of stmt('SELECT id FROM documents WHERE short_id IS NULL').all()) {
+    stmt('UPDATE documents SET short_id=? WHERE id=?').run(uniqueShortId(), row.id);
+  }
   const transaction = fn => { db.exec('BEGIN IMMEDIATE'); try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; } };
-  const docById = id => stmt('SELECT * FROM documents WHERE id=?').get(id) || fail(404, '文档不存在');
+  const docById = ref => stmt('SELECT * FROM documents WHERE id=?').get(ref)
+    || stmt('SELECT * FROM documents WHERE short_id=?').get(ref)
+    || fail(404, '文档不存在');
   const revision = (id, version) => stmt('SELECT * FROM revisions WHERE doc_id=? AND version=?').get(id, version) || fail(404, '文档版本不存在');
   const threads = (id, version, onlyOpen = false) => stmt(`SELECT * FROM comments WHERE doc_id=? AND version=? ${onlyOpen ? "AND status='open'" : ''} ORDER BY created`).all(id, version).map(c => ({ ...c, selectors: JSON.parse(c.selectors), replies: stmt('SELECT * FROM replies WHERE comment_id=? ORDER BY created').all(c.id) }));
   const notify = (id, type = 'comments') => { for (const [response, sub] of subscribers) if (sub === id || type === 'documents') response.write(`event: update\ndata: ${JSON.stringify({ docId: id, type })}\n\n`); };
@@ -53,20 +79,74 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
       stmt('INSERT OR REPLACE INTO assets VALUES(?,?,?,?,?)').run(id, version, a.path, a.mime, buffer);
     }
   }
-  function createDocument(body, author) {
+  function createDocument(body, author, ownerId = null) {
     const filename = text(body.filename || 'document.md', '文件名', 250);
     const title = String(body.title || body.markdown?.match(/^#\s+(.+)$/m)?.[1] || filename.replace(/\.(md|markdown)$/i, '')).slice(0, 200);
-    const id = uuid(), timestamp = now();
-    transaction(() => { stmt('INSERT INTO documents VALUES(?,?,?,?,?,1)').run(id, title, filename, timestamp, timestamp); storeRevision(id, 1, body, author); });
-    return { id, version: 1, title };
+    const id = uuid(), timestamp = now(), shortId = uniqueShortId();
+    transaction(() => {
+      stmt('INSERT INTO documents(id,title,filename,created,updated,latest,short_id,owner_id) VALUES(?,?,?,?,?,1,?,?)').run(id, title, filename, timestamp, timestamp, shortId, ownerId);
+      storeRevision(id, 1, body, author);
+    });
+    return { id, shortId, version: 1, title, url: `/d/${shortId}` };
   }
+  function addRevision(doc, body, user) {
+    const latest = docById(doc.id).latest;
+    if (body.baseVersion !== undefined && body.baseVersion !== null && body.baseVersion !== latest) fail(409, '已有新版本，请刷新后重新上传');
+    if (hash(body.markdown || '') === revision(doc.id, latest).hash) fail(409, '文档内容与最新版本相同，无需重复上传');
+    transaction(() => {
+      storeRevision(doc.id, latest + 1, body, user.name);
+      stmt('UPDATE documents SET latest=?,updated=? WHERE id=?').run(latest + 1, now(), doc.id);
+    });
+    notify(doc.id, 'documents');
+    return { id: doc.id, shortId: doc.short_id, version: latest + 1, url: `/d/${doc.short_id}` };
+  }
+  const ownerOf = doc => doc.owner_id ? stmt('SELECT id, account, name FROM users WHERE id=?').get(doc.owner_id) || null : null;
+  const toTimestamp = value => {
+    if (!value) return null;
+    const date = /^\d+$/.test(String(value)) ? new Date(Number(value)) : new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  };
+  const listDocuments = ({ owner = null, since = null, until = null, limit = 200 } = {}) => stmt(`
+    SELECT d.*, u.account AS owner_account,
+      COALESCE(u.name, (SELECT author FROM revisions r WHERE r.doc_id=d.id ORDER BY version LIMIT 1)) AS owner_name,
+      (SELECT COUNT(*) FROM comments c WHERE c.doc_id=d.id AND c.version=d.latest AND c.status='open') AS open_count,
+      (SELECT COUNT(*) FROM comments c WHERE c.doc_id=d.id AND c.version=d.latest) AS comment_count
+    FROM documents d LEFT JOIN users u ON u.id=d.owner_id
+    WHERE (? IS NULL OR d.owner_id IN (SELECT id FROM users WHERE account=? OR name=?) OR d.id IN (SELECT doc_id FROM revisions WHERE author=?))
+      AND (? IS NULL OR d.updated>=?) AND (? IS NULL OR d.updated<=?)
+    ORDER BY d.updated DESC LIMIT ?`).all(owner, owner, owner, owner, since, since, until, until, limit);
+  const serviceDocument = (ref, { version = null, include = [] } = {}) => {
+    const doc = docById(ref);
+    const v = version ?? doc.latest;
+    const rev = revision(doc.id, v);
+    const owner = ownerOf(doc);
+    const result = {
+      id: doc.id, shortId: doc.short_id, url: `/d/${doc.short_id}`,
+      title: doc.title, filename: doc.filename, latest: doc.latest, version: v,
+      created: doc.created, updated: doc.updated, hash: rev.hash, sourcePath: rev.source_path,
+      owner: { account: owner?.account ?? null, name: owner?.name ?? rev.author },
+    };
+    if (include.includes('content')) result.content = rev.markdown;
+    if (include.includes('comments')) result.comments = threads(doc.id, v);
+    if (include.includes('versions')) result.versions = stmt('SELECT version, created, author, hash FROM revisions WHERE doc_id=? ORDER BY version DESC').all(doc.id);
+    return result;
+  };
   if (seed && !stmt('SELECT id FROM documents LIMIT 1').get()) createDocument({ filename: '开始使用.md', markdown: STARTER }, '共阅');
 
-  const currentUser = req => {
+  const cookieUser = req => {
     const token = (req.headers.cookie || '').match(/(?:^|;\s*)review_session=([a-f0-9]{64})(?:;|$)/)?.[1];
     return token ? stmt('SELECT users.* FROM sessions JOIN users ON users.id=sessions.user_id WHERE token=?').get(hash(token)) : undefined;
   };
-  const requireUser = req => currentUser(req) || fail(401, '请先填写你的姓名');
+  const bearerToken = req => {
+    const match = (req.headers.authorization || '').match(/^Bearer\s+([a-f0-9]{64})$/i);
+    return match ? match[1].toLowerCase() : null;
+  };
+  const bearerUser = req => {
+    const token = bearerToken(req);
+    return token ? stmt('SELECT * FROM users WHERE token_hash=?').get(hash(token)) : undefined;
+  };
+  const currentUser = req => cookieUser(req) || bearerUser(req);
+  const requireUser = req => currentUser(req) || fail(401, '请先填写你的姓名，或带上 Bearer token');
   async function readBody(req) {
     if (!req.headers['content-type']?.startsWith('application/json')) fail(415, '请求必须是 JSON');
     let size = 0; const chunks = [];
@@ -83,7 +163,7 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       const path = decodeURIComponent(url.pathname);
       const method = req.method;
-      if (!['GET', 'HEAD'].includes(method)) {
+      if (!['GET', 'HEAD'].includes(method) && !bearerToken(req)) {
         const origin = req.headers.origin;
         if (origin && origin !== `http://${req.headers.host}` && origin !== `https://${req.headers.host}`) fail(403, '不允许跨站提交');
         if (req.headers['x-review-request'] !== '1') fail(403, '请求缺少校验标记');
@@ -100,19 +180,80 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
         if (user) stmt('UPDATE users SET name=? WHERE id=?').run(name, user.id);
         else {
           user = { id: uuid(), name }; const token = randomBytes(32).toString('hex');
-          transaction(() => { stmt('INSERT INTO users VALUES(?,?)').run(user.id, name); stmt('INSERT INTO sessions VALUES(?,?)').run(hash(token), user.id); });
+          transaction(() => { stmt('INSERT INTO users(id,name) VALUES(?,?)').run(user.id, name); stmt('INSERT INTO sessions VALUES(?,?)').run(hash(token), user.id); });
           res.setHeader('Set-Cookie', `review_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=15552000`);
         }
         return json(res, { id: user.id, name });
       }
-      if (path === '/api/documents' && method === 'GET') return json(res, stmt(`SELECT d.*, (SELECT COUNT(*) FROM comments c WHERE c.doc_id=d.id AND c.version=d.latest AND c.status='open') AS open_count FROM documents d ORDER BY updated DESC`).all());
+      if (path === '/api/accounts' && method === 'POST') {
+        const body = await readBody(req);
+        const account = String(body.account || '').trim().toLowerCase();
+        if (!/^[a-z0-9][a-z0-9_.-]{1,39}$/.test(account)) fail(400, '账号需 2–40 位，只能包含小写字母、数字、下划线、点或连字符');
+        const name = text(body.name || account, '姓名', 40);
+        const token = randomBytes(32).toString('hex');
+        const existing = stmt('SELECT * FROM users WHERE account=?').get(account);
+        if (existing) {
+          const current = bearerUser(req);
+          if (!current || current.id !== existing.id) fail(409, '账号已存在；换 token 需要带上旧 token');
+          stmt('UPDATE users SET token_hash=?, name=? WHERE id=?').run(hash(token), name, existing.id);
+          return json(res, { id: existing.id, account, name, token, rotated: true });
+        }
+        const id = uuid();
+        stmt('INSERT INTO users(id,name,account,token_hash) VALUES(?,?,?,?)').run(id, name, account, hash(token));
+        return json(res, { id, account, name, token }, 201);
+      }
+      if (path === '/api/accounts/me' && method === 'GET') {
+        const user = requireUser(req);
+        if (!user.account) fail(400, '当前是网页姓名登录，没有账号');
+        return json(res, { id: user.id, account: user.account, name: user.name });
+      }
+      if (path === '/api/service/documents' && method === 'POST') {
+        const user = requireUser(req), result = createDocument(await readBody(req), user.name, user.id);
+        notify(result.id, 'documents');
+        return json(res, result, 201);
+      }
+      if (path === '/api/service/documents' && method === 'GET') {
+        const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 200, 1), 500);
+        const owner = url.searchParams.get('account') || url.searchParams.get('owner');
+        const rows = listDocuments({ owner, since: toTimestamp(url.searchParams.get('since')), until: toTimestamp(url.searchParams.get('until')), limit });
+        return json(res, rows.map(row => ({
+          id: row.id, shortId: row.short_id, url: `/d/${row.short_id}`, title: row.title, filename: row.filename,
+          latest: row.latest, created: row.created, updated: row.updated,
+          owner: { account: row.owner_account, name: row.owner_name },
+          openCount: row.open_count, commentCount: row.comment_count,
+        })));
+      }
+      const serviceRoute = path.match(/^\/api\/service\/documents\/([0-9a-zA-Z-]{4,64})(?:\/(revisions))?$/);
+      if (serviceRoute) {
+        const [, ref, action] = serviceRoute, doc = docById(ref);
+        if (!action && method === 'GET') {
+          const rawVersion = url.searchParams.get('v');
+          const version = rawVersion && rawVersion !== 'latest' ? Number(rawVersion) : null;
+          if (version !== null && (!Number.isSafeInteger(version) || version < 1)) fail(400, '版本号无效');
+          const include = (url.searchParams.get('include') || '').split(',').map(part => part.trim()).filter(Boolean);
+          return json(res, serviceDocument(doc.id, { version, include }));
+        }
+        if (action === 'revisions' && method === 'POST') {
+          const user = requireUser(req), owner = ownerOf(doc);
+          if (owner && owner.id !== user.id) fail(403, '只有文档所有者可以上传新版本');
+          return json(res, addRevision(doc, await readBody(req), user), 201);
+        }
+      }
+      if (path === '/api/documents' && method === 'GET') {
+        return json(res, listDocuments({
+          owner: url.searchParams.get('owner'),
+          since: toTimestamp(url.searchParams.get('since')),
+          until: toTimestamp(url.searchParams.get('until')),
+          limit: Math.min(Math.max(Number(url.searchParams.get('limit')) || 500, 1), 500),
+        }));
+      }
       if (path === '/api/documents' && method === 'POST') {
-        const u = requireUser(req), result = createDocument(await readBody(req), u.name);
+        const u = requireUser(req), result = createDocument(await readBody(req), u.name, u.id);
         notify(result.id, 'documents'); return json(res, result, 201);
       }
-      const route = path.match(/^\/api\/documents\/([a-f0-9-]+)(?:\/(.*))?$/);
+      const route = path.match(/^\/api\/documents\/([0-9a-zA-Z-]{4,64})(?:\/(.*))?$/);
       if (route) {
-        const [, id, action = ''] = route; const doc = docById(id);
+        const [, ref, action = ''] = route; const doc = docById(ref); const id = doc.id;
         const version = url.searchParams.has('v') ? Number(url.searchParams.get('v')) : doc.latest;
         if (!Number.isSafeInteger(version) || version < 1) fail(400, '版本号无效');
         if (action === 'events' && method === 'GET') {
@@ -123,11 +264,8 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
         }
         if (!action && method === 'GET') return json(res, { ...doc, revision: revision(id, version), versions: stmt(`SELECT r.version,r.created,r.author,r.hash, (SELECT COUNT(*) FROM comments c WHERE c.doc_id=r.doc_id AND c.version=r.version AND c.status='open') AS open_count FROM revisions r WHERE r.doc_id=? ORDER BY version DESC`).all(id) });
         if (action === 'revisions' && method === 'POST') {
-          const user = requireUser(req), body = await readBody(req); const latest = docById(id).latest;
-          if (body.baseVersion !== latest) fail(409, '已有新版本，请刷新后重新上传');
-          if (hash(body.markdown || '') === revision(id, latest).hash) fail(409, '文档内容与最新版本相同，无需重复上传');
-          transaction(() => { storeRevision(id, latest + 1, body, user.name); stmt('UPDATE documents SET latest=?,updated=? WHERE id=?').run(latest + 1, now(), id); });
-          notify(id, 'documents'); return json(res, { id, version: latest + 1 }, 201);
+          const user = requireUser(req);
+          return json(res, addRevision(doc, await readBody(req), user), 201);
         }
         if (action.startsWith('assets/') && method === 'GET') {
           const parts = action.slice(7).split('/'), v = Number(parts.shift()), assetPath = parts.join('/');

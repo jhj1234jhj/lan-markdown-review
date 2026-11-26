@@ -18,11 +18,32 @@ function withUser(fn) { if (state.user) return run(fn)(); showIdentity(fn); }
 function requireDocument() { if (!state.doc) throw new Error('请先导入或打开一份文档'); }
 function connection(connected) { $('connection-dot').className = `connection-dot ${connected ? 'connected' : 'disconnected'}`; $('connection-text').textContent = connected ? '局域网协作 · 已连接' : '连接中断 · 正在重连'; }
 const docIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H5v18h14V8l-5-5Z"/><path d="M14 3v5h5M8 12h8M8 16h6"/></svg>';
+const ownerLabel = d => d.owner_account ? `@${d.owner_account}` : (d.owner_name || '未署名');
+const ownerKey = d => d.owner_account || d.owner_name || '';
 async function loadLibrary() { state.documents = await api('/api/documents'); renderLibrary(); }
+function renderOwnerOptions() {
+  const select = $('owner-filter'), current = select.value, owners = new Map();
+  for (const doc of state.documents) if (ownerKey(doc)) owners.set(ownerKey(doc), ownerLabel(doc));
+  const entries = [...owners].sort((a, b) => a[1].localeCompare(b[1], 'zh-CN'));
+  select.innerHTML = '<option value="">全部账号</option>' + entries.map(([key, label]) => `<option value="${esc(key)}">${esc(label)}</option>`).join('');
+  select.value = owners.has(current) ? current : '';
+}
+function visibleDocuments() {
+  const query = $('document-search').value.trim().toLocaleLowerCase();
+  const owner = $('owner-filter').value, days = Number($('time-filter').value) || 0;
+  const cutoff = days ? Date.now() - days * 86400000 : 0;
+  return state.documents.filter(d => {
+    if (query && !`${d.title} ${d.filename} ${ownerLabel(d)}`.toLocaleLowerCase().includes(query)) return false;
+    if (owner && ownerKey(d) !== owner) return false;
+    if (cutoff && new Date(d.updated).getTime() < cutoff) return false;
+    return true;
+  });
+}
 function renderLibrary() {
-  const query = $('document-search').value.toLocaleLowerCase();
-  $('document-count').textContent = state.documents.length;
-  $('document-list').innerHTML = state.documents.filter(d => `${d.title} ${d.filename}`.toLocaleLowerCase().includes(query)).map(d => `<a class="document-link${d.id === state.doc?.id ? ' active' : ''}" href="/d/${d.id}" data-doc="${d.id}">${docIcon}<span class="doc-name">${esc(d.title)}</span>${d.open_count ? `<span class="count-badge">${d.open_count}</span>` : ''}</a>`).join('') || '<p class="helper">没有匹配的文档</p>';
+  renderOwnerOptions();
+  const visible = visibleDocuments();
+  $('document-count').textContent = visible.length === state.documents.length ? state.documents.length : `${visible.length}/${state.documents.length}`;
+  $('document-list').innerHTML = visible.map(d => `<a class="document-link${d.id === state.doc?.id ? ' active' : ''}" href="/d/${d.short_id || d.id}" data-doc="${d.short_id || d.id}">${docIcon}<span class="doc-name">${esc(d.title)}</span>${d.open_count ? `<span class="count-badge">${d.open_count}</span>` : ''}<span class="doc-meta">${esc(ownerLabel(d))} · ${date(d.updated)}</span></a>`).join('') || '<p class="helper">没有匹配的文档</p>';
 }
 async function openDocument(id, version, { replace = false } = {}) {
   const token = ++state.loading;
@@ -31,7 +52,7 @@ async function openDocument(id, version, { replace = false } = {}) {
   state.stream?.close(); state.doc = doc; state.version = doc.revision.version; state.comments = []; state.ranges.clear(); state.selected = null; state.replies.clear();
   clearSelection();
   for (const name of ['review-open','review-resolved','review-active']) CSS.highlights?.delete(name);
-  const path = `/d/${doc.id}?v=${state.version}`;
+  const path = `/d/${doc.short_id || doc.id}?v=${state.version}`;
   history[replace ? 'replaceState' : 'pushState']({}, '', path);
   document.title = `${doc.title} · 共阅`;
   $('toolbar-title').textContent = doc.title; $('document-title').textContent = doc.title;
@@ -208,6 +229,8 @@ $('import-form').addEventListener('submit', run(async e => {
   });
 }));
 $('document-search').addEventListener('input', renderLibrary);
+$('owner-filter').addEventListener('change', renderLibrary);
+$('time-filter').addEventListener('change', renderLibrary);
 $('document-list').addEventListener('click', run(async e => { const link = e.target.closest('[data-doc]'); if (link && !e.ctrlKey && !e.metaKey) { e.preventDefault(); $('library').classList.remove('open'); await openDocument(link.dataset.doc); } }));
 $('outline').addEventListener('click', e => { const link = e.target.closest('a'); if (link) { e.preventDefault(); $(link.hash.slice(1))?.scrollIntoView({ behavior:'smooth', block:'start' }); $('library').classList.remove('open'); } });
 $('version-select').addEventListener('change', run(() => openDocument(state.doc.id, Number($('version-select').value))));
@@ -250,7 +273,7 @@ $('comments').addEventListener('submit', run(async e => {
 document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && e.target.matches('textarea')) { const form = e.target.closest('form'); if (form) { e.preventDefault(); form.requestSubmit(); } } });
 $('share-button').addEventListener('click', run(() => {
   requireDocument(); const origin = ['localhost','127.0.0.1','[::1]'].includes(location.hostname) ? state.addresses[0] || location.origin : location.origin;
-  $('share-url').value = `${origin}/d/${state.doc.id}?v=${state.version}`;
+  $('share-url').value = `${origin}/d/${state.doc.short_id || state.doc.id}?v=${state.version}`;
   $('share-version').textContent = `${state.doc.title} · v${state.version}`; $('share-dialog').showModal();
 }));
 $('copy-share').addEventListener('click', run(async () => {
@@ -261,16 +284,16 @@ $('copy-share').addEventListener('click', run(async () => {
 }));
 $('export-button').addEventListener('click', run(() => { updateExportLinks(); $('export-dialog').showModal(); }));
 $('export-scope').addEventListener('change', updateExportLinks);
-window.addEventListener('popstate', run(() => { const match = location.pathname.match(/^\/d\/([a-f0-9-]+)$/); if (match) return openDocument(match[1], Number(new URLSearchParams(location.search).get('v')) || undefined, { replace:true }); }));
+window.addEventListener('popstate', run(() => { const match = location.pathname.match(/^\/d\/([0-9a-z-]{8,64})$/i); if (match) return openDocument(match[1], Number(new URLSearchParams(location.search).get('v')) || undefined, { replace:true }); }));
 window.addEventListener('online', () => state.doc && run(loadComments)());
 document.addEventListener('visibilitychange', () => { if (!document.hidden && state.doc) run(async () => { await loadLibrary(); await loadComments(); })(); });
 
 run(async () => {
   const info = await api('/api/info'); setUser(info.user); state.addresses = info.addresses; connection(true);
   await loadLibrary();
-  const match = location.pathname.match(/^\/d\/([a-f0-9-]+)$/), params = new URLSearchParams(location.search);
+  const match = location.pathname.match(/^\/d\/([0-9a-z-]{8,64})$/i), params = new URLSearchParams(location.search);
   if (params.get('comment')) sessionStorage.setItem('review-focus-comment', params.get('comment'));
-  const id = match?.[1] || state.documents[0]?.id;
+  const id = match?.[1] || state.documents[0]?.short_id || state.documents[0]?.id;
   if (id) await openDocument(id, Number(params.get('v')) || undefined, { replace:true });
   if (!state.user) showIdentity();
 })();

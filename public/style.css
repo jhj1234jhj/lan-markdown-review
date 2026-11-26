@@ -9,3 +9,11 @@
 @media(max-width:960px){.library{display:none;position:fixed;height:100dvh;z-index:40;box-shadow:12px 0 40px #22335330;width:250px}.library.open{display:flex}.mobile-only{display:block}.toolbar{height:65px}.breadcrumb>span,.breadcrumb>strong{display:none}.review-layout{grid-template-columns:minmax(0,1fr) 310px}.reading-pane{padding:25px 18px}.markdown-body{padding:24px}.toolbar-actions{margin-left:auto}}
 @media(max-width:700px){.app-shell{height:auto;min-height:100dvh;overflow:visible}.workspace{min-height:100dvh}.toolbar{position:sticky;top:0;z-index:20;padding:0 13px}.toolbar .button{padding:7px 11px;font-size:12px;min-height:34px}.identity-button #user-name{display:none}.toolbar-actions{gap:7px}.review-layout{display:flex;flex-direction:column}.reading-pane{overflow:visible;padding:24px 15px}.review-pane{border-left:0;border-top:1px solid var(--line);min-height:340px}.comments{max-height:none;overflow:visible}.markdown-body{padding:25px 21px;font-size:16px}.markdown-body h1{font-size:24px}.markdown-body h2{font-size:19px}.document-head h1{font-size:23px}.review-heading{padding:20px}.comment-filters{padding:0 20px}.document-end{margin-bottom:10px}.modal{padding:23px}.library{top:0;left:0}.document-list{max-height:40vh}}
 @media print{.library,.toolbar,.review-pane,.reading-hint,.version-tools,.document-end,.document-meta a{display:none!important}.app-shell,.workspace,.review-layout,.reading-pane{display:block;height:auto;overflow:visible;padding:0}.document-head{display:none}.markdown-body{box-shadow:none;border:none;padding:0;max-width:none}}
+
+/* 文档库筛选 */
+.library-filters{display:flex;gap:6px;margin-top:8px}
+.filter-field{flex:1;min-width:0;margin:0}
+.library-filters select{width:100%;font-size:12px;padding:6px 24px 6px 8px;border-radius:7px;background-color:#fff;border-color:#e0e5ef;color:#5c6980}
+.document-link{flex-wrap:wrap}
+.document-link .doc-name{flex:1;min-width:0}
+.doc-meta{flex-basis:100%;margin-left:28px;margin-top:-3px;font-size:11px;color:#98a2b4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

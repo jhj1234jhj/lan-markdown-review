@@ -39,23 +39,26 @@ pnpm start
 5. **上传新版本**：改完文档点「上传新版本」，旧版本从版本下拉里仍可打开。
 6. **导出意见**：导出 Markdown（便于人读）或 JSON（保留定位信息，便于程序处理）。
 
+首页左侧的文档库可以按 **账号** 和 **时间**（今天 / 近 7 天 / 近 30 天）筛选，和搜索框叠加使用；每篇文档下面显示所有者与更新时间。
+
 ## 部署与数据
 
 - 单进程、单文件：文档、批注、图片都在 `data/review.sqlite` 里，**备份就是拷贝 `data/` 整个目录**（连 `-wal`、`-shm` 一起）。
 - 删掉 `data/` 就是重置，下次启动会重建并重新播种示例文档。
-- 默认监听 `0.0.0.0` 并向局域网开放：**同一网络内能访问端口的人都能读写**，请只放在可信局域网里。
+- 默认监听 `0.0.0.0` 并向局域网开放：**同一网络内能访问端口的人都能读写**，请只放在可信局域网里。账号注册也是开放的，token 只存哈希。
 
 ## 目录结构
 
 ```
 server.mjs            HTTP 路由、SQLite 表结构、SSE 广播
-src/app.js            前端状态机：路由、列表、批注渲染与交互（约 270 行）
+src/app.js            前端状态机：路由、列表、批注渲染与交互（约 290 行）
 src/render.js         Markdown → DOM：markdown-it + DOMPurify + highlight.js + mermaid
 src/anchoring.js      选区 → 选择器；选择器 → 选区（严格匹配）
 public/index.html     单页壳：侧栏、正文、批注栏、对话框
 public/style.css      样式
 public/dist/          由 scripts/build.mjs 用 esbuild 打包生成（gitignore，需先 build）
-tests/                node:test：接口、SSE、导出、版本隔离、锚定
+client/review.py      Python 客户端：register / submit / latest / comments / list
+tests/                node:test：接口、账号与 token、短 id、SSE、导出、版本隔离、锚定
 qa/browser-qa.mjs     用独立数据目录在 6768 端口起服务，手动验收用
 vendor/hypothesis/    Hypothesis 的锚定组件（BSD-2-Clause，见 PROVENANCE.md）
 data/                 运行时数据库（gitignore）
@@ -82,7 +85,7 @@ data/                 运行时数据库（gitignore）
 
 ## HTTP 接口
 
-写操作要求登录 cookie（`review_session`，HttpOnly），并同时满足：`Origin` 与 Host 一致、带 `X-Review-Request: 1` 头、`Content-Type: application/json`。
+浏览器写操作走登录 cookie（`review_session`，HttpOnly），要求 `Origin` 与 Host 一致、带 `X-Review-Request: 1` 头、`Content-Type: application/json`；程序调用改用 `Authorization: Bearer <token>`，不需要 cookie 和这两个校验头。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -104,6 +107,58 @@ data/                 运行时数据库（gitignore）
 
 JSON 导出格式见代码：`schema: "lan-review/1"`，每条批注带 `target.selector`（两个选择器原文）与 `sourcePath`。
 
+## 服务接口（给程序用）
+
+给自动化用的入口：带 token 提交文档 → 拿到短 id → 之后按需取最新稿、取意见，或两者都取。
+
+### 账号与 token
+
+局域网内开放注册，不需要旧凭据：
+
+```bash
+curl -s -X POST http://127.0.0.1:6767/api/accounts \
+  -H 'Content-Type: application/json' -H 'X-Review-Request: 1' \
+  -d '{"account":"alice","name":"爱丽丝"}'
+# {"id":"…","account":"alice","name":"爱丽丝","token":"<64 位十六进制，只返回这一次>"}
+```
+
+服务端只存 token 的 SHA-256；带旧 token 再调一次 `/api/accounts` 可以换发，旧 token 立即失效。
+
+### 接口
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/accounts` | `{account, name}` 注册；带旧 token 则换发 |
+| GET | `/api/accounts/me` | 当前 token 对应的账号 |
+| POST | `/api/service/documents` | 提交文档，body 同导入；返回 `{id, shortId, version, url}` |
+| GET | `/api/service/documents?account=&since=&until=&limit=` | 列表，按账号 / 时间过滤 |
+| GET | `/api/service/documents/:ref?include=content,comments&v=` | `ref` 可为短 id 或 UUID；`include` 选正文、选意见，或都选 |
+| POST | `/api/service/documents/:ref/revisions` | 上传新版本，仅文档所有者 |
+
+```bash
+# 只要意见，不要正文
+curl -s "http://127.0.0.1:6767/api/service/documents/r7k2m9qd?include=comments"
+# 最新稿 + 意见一起取
+curl -s "http://127.0.0.1:6767/api/service/documents/r7k2m9qd?include=content,comments"
+```
+
+短 id 是 8 位、去掉了容易看错的 `0/1/i/l/o`；`/d/r7k2m9qd` 和 `/d/<uuid>` 打开的是同一篇文档。
+
+## 命令行客户端
+
+`client/review.py` 只用 Python 标准库，把「注册 → 提交 → 取稿 → 取意见」串起来：
+
+```bash
+python client/review.py register --account alice --name 爱丽丝   # 打印 token，只显示这一次
+export REVIEW_TOKEN=…                                            # Windows: set REVIEW_TOKEN=…
+python client/review.py submit 方案.md                           # 正文引用的本地图片会自动带上
+python client/review.py latest r7k2m9qd --out 最新稿.md
+python client/review.py comments r7k2m9qd
+python client/review.py list --account alice --since 2026-11-01
+```
+
+服务地址默认 `http://127.0.0.1:6767`，用 `--base` 或环境变量 `REVIEW_BASE` 改；`--json` 输出原始结构，方便再接管道。
+
 ## 限制
 
 | 项 | 限制 |
@@ -112,13 +167,14 @@ JSON 导出格式见代码：`schema: "lan-review/1"`，每条批注带 `target.
 | 图片 | 仅 PNG/JPEG/WebP/GIF，单版本合计 ≤ 8 MB、≤ 100 张 |
 | 批注正文 | ≤ 20000 字符，引用文字 ≤ 8000 字符 |
 | 姓名 | ≤ 40 字符，仅作显示，**不是身份认证** |
+| 账号 | 2–40 位小写字母/数字/`._-`；token 只存哈希，换发后旧 token 立即失效 |
 
 另外：单实例部署（SQLite + 进程内 SSE，不支持多机共享）；批注不跨版本；没有删除文档 / 批注的接口。
 
 ## 测试与验收
 
 ```powershell
-pnpm test     # node --test：接口、SSE、导出、版本隔离、重启持久化、非法输入、跨站拦截、锚定
+pnpm test     # node --test：接口、账号与 token、短 id、SSE、导出、版本隔离、重启持久化、非法输入、跨站拦截、锚定
 pnpm build    # esbuild 打包 src/ → public/dist
 pnpm qa       # 6768 端口，独立数据目录，手动浏览器验收
 ```
