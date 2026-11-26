@@ -1,0 +1,10 @@
+import { build } from 'esbuild';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const root = fileURLToPath(new URL('..', import.meta.url));
+mkdirSync(resolve(root, 'public/dist'), { recursive: true });
+await build({ absWorkingDir: root, entryPoints: ['src/app.js'], bundle: true, format: 'esm', splitting: true, outdir: 'public/dist', minify: true, target: ['chrome105'], chunkNames: 'chunks/[name]-[hash]', legalComments: 'linked', logLevel: 'info' });
+const pkg = JSON.parse(readFileSync(resolve(root,'package.json'),'utf8'));
+for (const group of ['dependencies','devDependencies']) for (const name of Object.keys(pkg[group])) pkg[group][name] = JSON.parse(readFileSync(resolve(root,'node_modules',name,'package.json'),'utf8')).version;
+writeFileSync(resolve(root,'package.json'), JSON.stringify(pkg,null,2)+'\n');

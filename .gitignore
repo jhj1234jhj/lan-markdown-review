@@ -1,0 +1,7 @@
+node_modules/
+data/
+public/dist/
+qa/browser-qa-data/
+qa/.cache/
+*.log
+service.pid
