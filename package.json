@@ -2,6 +2,12 @@
   "name": "lan-markdown-review",
   "version": "1.0.0",
   "private": true,
+  "description": "局域网 Markdown 协作评审：划词批注、讨论、版本隔离与意见导出",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jhj1234jhj/lan-markdown-review.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=24"
