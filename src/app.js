@@ -120,7 +120,9 @@ function buildMarginMarkers() {
 }
 function applyDisplayMode() {
   const content = $('document-content');
-  content.classList.toggle('compact', state.displayMode === 'compact' && !state.diff);
+  const compact = state.displayMode === 'compact';
+  content.classList.toggle('compact', compact && !state.diff);
+  content.classList.toggle('diff-compact', compact && Boolean(state.diff));
   document.querySelector('.review-pane')?.classList.toggle('diff-mode', Boolean(state.diff));
   updateHighlights();
   requestAnimationFrame(buildMarginMarkers);
@@ -318,6 +320,16 @@ function busyForm(form, fn) {
   return Promise.resolve().then(fn).finally(() => { delete form.dataset.busy; if (button) button.disabled = false; });
 }
 
+function openEditor() {
+  requireDocument();
+  if (state.version !== state.doc.latest) throw new Error('请先切换到最新版本再编辑');
+  const area = $('editor-markdown');
+  area.value = state.doc.revision.markdown;
+  $('editor-hint').textContent = `当前 v${state.version}，保存后成为 v${state.doc.latest + 1}，并自动打开「修改记录」对比。`;
+  $('editor-count').textContent = `${area.value.length} 字符`;
+  $('editor-dialog').showModal();
+  setTimeout(() => { area.focus(); area.setSelectionRange(0, 0); }, 30);
+}
 function openImport(mode) {
   if (mode === 'revision') requireDocument();
   state.importMode = mode; state.importTarget = mode === 'revision' ? { id:state.doc.id, baseVersion:state.doc.latest } : null;
@@ -371,6 +383,26 @@ $('identity-form').addEventListener('submit', run(async e => {
 }));
 $('import-document').addEventListener('click', () => withUser(() => openImport('new')));
 $('upload-version').addEventListener('click', () => withUser(() => openImport('revision')));
+$('edit-document').addEventListener('click', () => withUser(openEditor));
+$('editor-markdown').addEventListener('input', e => { $('editor-count').textContent = `${e.target.value.length} 字符`; });
+$('editor-form').addEventListener('submit', run(async e => {
+  e.preventDefault();
+  await busyForm(e.currentTarget, async () => {
+    const markdown = $('editor-markdown').value;
+    if (!markdown.trim()) throw new Error('正文不能为空');
+    if (state.version !== state.doc.latest) throw new Error('请先切换到最新版本再编辑');
+    const previous = state.version;
+    const result = await api(`/api/documents/${state.doc.id}/revisions`, {
+      method: 'POST',
+      body: { baseVersion: previous, markdown, filename: state.doc.filename, sourcePath: state.doc.revision.source_path },
+    });
+    $('editor-dialog').close();
+    state.diffBase = previous;
+    await loadLibrary();
+    await openDocument(state.doc.id, result.version);
+    toast(`已保存为 v${result.version}，正在显示修改记录`);
+  });
+}));
 $('file-input').addEventListener('change', run(e => receiveFiles(e.target.files)));
 $('folder-input').addEventListener('change', run(e => receiveFiles(e.target.files)));
 for (const event of ['dragenter','dragover']) $('dropzone').addEventListener(event, e => { e.preventDefault(); $('dropzone').classList.add('dragging'); });

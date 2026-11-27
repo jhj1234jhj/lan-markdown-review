@@ -146,6 +146,10 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
     if (hash(body.markdown || '') === revision(doc.id, latest).hash) fail(409, '文档内容与最新版本相同，无需重复上传');
     transaction(() => {
       storeRevision(doc.id, latest + 1, body, user.name);
+      // 只改正文、没带图片时，沿用上一版的图片，避免图片在新版本里丢失。
+      if (body.assets === undefined) {
+        stmt('INSERT OR REPLACE INTO assets(doc_id,version,path,mime,bytes) SELECT doc_id,?,path,mime,bytes FROM assets WHERE doc_id=? AND version=?').run(latest + 1, doc.id, latest);
+      }
       stmt('UPDATE documents SET latest=?,updated=? WHERE id=?').run(latest + 1, now(), doc.id);
     });
     notify(doc.id, 'documents');

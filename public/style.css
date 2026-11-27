@@ -62,3 +62,11 @@
 .markdown-body.diff-mode .diff-deleted *{text-decoration:line-through;text-decoration-color:#cf9b9b}
 .markdown-body.diff-mode .diff-deleted .mermaid-block{filter:grayscale(.6)}
 .review-pane.diff-mode .orphan-label{display:none}
+
+/* 编辑正文 */
+.editor-modal{width:min(920px,94vw);max-width:920px}
+.editor-textarea{width:100%;height:min(52vh,520px);font-family:ui-monospace,SFMono-Regular,Consolas,"Courier New",monospace;font-size:13px;line-height:1.7;white-space:pre;overflow:auto;resize:vertical;background:#fbfcfe}
+.editor-footer{display:flex;justify-content:space-between;gap:10px;margin-top:6px}
+/* 修改记录的紧凑视图：隐藏旧内容，只留改动处的细边 */
+.markdown-body.diff-mode.diff-compact .diff-deleted{display:none}
+.markdown-body.diff-mode.diff-compact .diff-inserted{background:none;box-shadow:inset 2px 0 #7fb894;padding:0 0 0 6px;margin-left:-6px;border-radius:0}

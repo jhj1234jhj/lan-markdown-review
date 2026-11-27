@@ -74,6 +74,23 @@ test('invalid input is rejected atomically; cross-origin writes and anonymous wr
   } finally { await app.close(); }
 });
 
+test('editing a version carries images forward', async () => {
+  const app = await launch(tempDir());
+  try {
+    const session = await request(app, '/api/session', 'POST', { name: '编辑者' });
+    const cookie = session.headers.get('set-cookie').split(';')[0];
+    const created = await request(app, '/api/documents', 'POST',
+      { filename: 'pic.md', markdown: '# 图\n\n![图](pic.png)\n', assets: [{ path: 'pic.png', mime: 'image/png', data: 'aGVsbG8=' }] }, cookie);
+    const id = created.body.id;
+    assert.equal((await request(app, `/api/documents/${id}/assets/1/pic.png`)).status, 200);
+    const v2 = await request(app, `/api/documents/${id}/revisions`, 'POST', { baseVersion: 1, markdown: '# 图\n\n改过的正文。\n' }, cookie);
+    assert.equal(v2.status, 201);
+    const carried = await request(app, `/api/documents/${id}/assets/2/pic.png`);
+    assert.equal(carried.status, 200);
+    assert.equal(carried.body, 'hello');
+  } finally { await app.close(); }
+});
+
 test('service API: token auth, short ids, submit/fetch, filters and revision ownership', async () => {
   const app = await launch(tempDir());
   const bearer = token => ({ Authorization: `Bearer ${token}` });
