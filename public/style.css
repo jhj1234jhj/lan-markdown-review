@@ -94,3 +94,16 @@
 .version-label{font-size:12px;color:#5c6880;background:#f1f3f8;border:1px solid #e3e8f1;border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:pointer}
 .change-flash{animation:changeFlash 2.4s ease-out;border-radius:6px}
 @keyframes changeFlash{0%{background:#fff3c4;box-shadow:0 0 0 6px #fff3c4}70%{background:#fff8dd;box-shadow:0 0 0 4px #fff8dd}100%{background:transparent;box-shadow:0 0 0 0 transparent}}
+
+/* 顶部工具栏：版本与显示控件固定在右上角，不随正文滚动 */
+.toolbar-actions{flex-wrap:nowrap;gap:8px;min-width:0;overflow-x:auto;scrollbar-width:none}
+.toolbar-actions::-webkit-scrollbar{display:none}
+.toolbar-group{display:flex;align-items:center;gap:2px;padding-right:8px;border-right:1px solid #eef1f7;flex-shrink:0}
+.toolbar-group:nth-last-of-type(1){border-right:0}
+.tool-button{border:0;background:none;color:#5f6b80;font-size:12px;padding:5px 7px;border-radius:6px;white-space:nowrap}
+.tool-button:hover{background:#f3f5fb;color:#3f4b60}
+.tool-button:disabled{color:#c2c8d4;background:none;cursor:not-allowed}
+.toolbar .segmented button{font-size:11px;padding:4px 8px}
+.toolbar .diff-switch{font-size:11px;gap:4px}
+.toolbar .diff-summary{font-size:11px;padding:2px 8px;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.toolbar .version-label{font-size:11px;padding:2px 8px;cursor:pointer;flex-shrink:0}
