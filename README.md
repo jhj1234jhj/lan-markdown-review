@@ -42,6 +42,12 @@ pnpm start
 8. **导出意见**：导出 Markdown（便于人读）或 JSON（保留定位信息，便于程序处理）。
 9. **删除文档**：左侧文档列表每行右侧有个小垃圾桶图标（悬停变清晰），原作者可以删除自己的文档；管理员可以删除任意文档。删除会连同所有版本、批注和图片一起移除，不可恢复。
 
+**文档编号**：工具栏标题旁显示 `ID xxxxxxxx`，点一下复制。把这个编号发给别人或在消息/脚本里使用，就能按编号拉取内容：
+
+- 原文与意见：`GET /api/service/documents/<ID>?include=content,comments`
+- 修改记录：`GET /api/service/documents/<ID>/diff?from=1&to=<最新版本>`
+- 版本列表：`GET /api/service/documents/<ID>?include=versions`
+
 首页左侧的文档库可以按 **账号** 和 **时间**（今天 / 近 7 天 / 近 30 天）筛选，和搜索框叠加使用；每篇文档下面显示所有者与更新时间。
 
 正文上方还有两个视图开关：
@@ -155,6 +161,7 @@ curl -s -X POST http://127.0.0.1:6767/api/accounts \
 | POST | `/api/service/documents` | 提交文档，body 同导入；返回 `{id, shortId, version, url}` |
 | GET | `/api/service/documents?account=&since=&until=&limit=` | 列表，按账号 / 时间过滤 |
 | GET | `/api/service/documents/:ref?include=content,comments&v=` | `ref` 可为短 id 或 UUID；`include` 选正文、选意见，或都选 |
+| GET | `/api/service/documents/:ref/diff?from=&to=` | 修改记录：两个版本的逐行差异 |
 | POST | `/api/service/documents/:ref/revisions` | 上传新版本，仅文档所有者 |
 
 ```bash
@@ -178,6 +185,7 @@ export REVIEW_TOKEN=…                                            # Windows: se
 python client/review.py submit 方案.md                           # 正文引用的本地图片会自动带上
 python client/review.py latest r7k2m9qd --out 最新稿.md
 python client/review.py comments r7k2m9qd
+python client/review.py diff r7k2m9qd --from 1 --to 3
 python client/review.py list --account alice --since 2026-11-01
 ```
 

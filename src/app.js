@@ -68,6 +68,7 @@ async function openDocument(id, version, { replace = false } = {}) {
   history[replace ? 'replaceState' : 'pushState']({}, '', path);
   document.title = `${doc.title} · 共阅`;
   $('toolbar-title').textContent = doc.title; $('document-title').textContent = doc.title;
+  $('doc-id').textContent = doc.short_id; $('doc-id').hidden = !doc.short_id; $('doc-id').dataset.id = doc.short_id;
   $('document-filename').textContent = doc.filename; $('document-date').textContent = `${shortDate(doc.revision.created)} · ${doc.revision.author}`;
   $('download-source').href = `/api/documents/${id}/source?v=${state.version}`;
   $('version-label').textContent = `v${doc.latest}`;
@@ -553,6 +554,7 @@ async function deleteDocument(ref, title) {
     $('document-content').innerHTML = '';
     $('document-title').textContent = '文档已删除';
     $('toolbar-title').textContent = '团队空间';
+    $('doc-id').hidden = true;
     $('comments').innerHTML = '';
     $('outline').innerHTML = '';
     history.replaceState({}, '', '/');
@@ -622,6 +624,17 @@ $('edit-document').addEventListener('click', () => withUser(openEditor));
 $('undo-version').addEventListener('click', run(undoVersion));
 $('redo-version').addEventListener('click', run(redoVersion));
 $('history-button').addEventListener('click', run(openHistory));
+$('doc-id').addEventListener('click', run(async () => {
+  const id = $('doc-id').dataset.id;
+  if (!id) return;
+  try {
+    if (!navigator.clipboard || !window.isSecureContext) throw new Error('no clipboard');
+    await navigator.clipboard.writeText(id);
+    toast(`已复制文档编号 ${id}`);
+  } catch {
+    toast(`文档编号：${id}`);
+  }
+}));
 $('editor-markdown').addEventListener('input', e => { $('editor-count').textContent = `${e.target.value.length} 字符`; });
 $('editor-form').addEventListener('submit', run(async e => {
   e.preventDefault();

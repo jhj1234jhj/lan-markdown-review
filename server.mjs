@@ -293,7 +293,7 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
           openCount: row.open_count, commentCount: row.comment_count,
         })));
       }
-      const serviceRoute = path.match(/^\/api\/service\/documents\/([0-9a-zA-Z-]{4,64})(?:\/(revisions))?$/);
+      const serviceRoute = path.match(/^\/api\/service\/documents\/([0-9a-zA-Z-]{4,64})(?:\/(revisions|diff))?$/);
       if (serviceRoute) {
         const [, ref, action] = serviceRoute, doc = docById(ref);
         if (!action && method === 'GET') {
@@ -302,6 +302,24 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
           if (version !== null && (!Number.isSafeInteger(version) || version < 1)) fail(400, '版本号无效');
           const include = (url.searchParams.get('include') || '').split(',').map(part => part.trim()).filter(Boolean);
           return json(res, serviceDocument(doc.id, { version, include }));
+        }
+        if (action === 'diff' && method === 'GET') {
+          const rawFrom = url.searchParams.get('from'), rawTo = url.searchParams.get('to');
+          const from = rawFrom ? Number(rawFrom) : 1;
+          const to = rawTo ? Number(rawTo) : doc.latest;
+          if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 1 || to < 1) fail(400, '版本号无效');
+          const before = revision(doc.id, from), after = revision(doc.id, to);
+          const ops = lineDiff(before.markdown, after.markdown);
+          return json(res, {
+            id: doc.id, shortId: doc.short_id, url: `/d/${doc.short_id}`,
+            from: { version: from, author: before.author, created: before.created, hash: before.hash },
+            to: { version: to, author: after.author, created: after.created, hash: after.hash },
+            stats: {
+              added: ops.reduce((sum, op) => sum + (op.type === 'insert' ? op.lines.length : 0), 0),
+              removed: ops.reduce((sum, op) => sum + (op.type === 'delete' ? op.lines.length : 0), 0),
+            },
+            ops,
+          });
         }
         if (action === 'revisions' && method === 'POST') {
           const user = requireUser(req), owner = ownerOf(doc);

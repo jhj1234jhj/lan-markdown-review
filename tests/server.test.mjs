@@ -175,6 +175,30 @@ test('document deletion is limited to the author and admin', async () => {
   } finally { await app.close(); }
 });
 
+test('service API exposes diff and versions by short id', async () => {
+  const app = await launch(tempDir());
+  try {
+    const reg = await request(app, '/api/accounts', 'POST', { account: 'dana', name: 'Dana' });
+    const auth = { Authorization: `Bearer ${reg.body.token}` };
+    const created = await request(app, '/api/service/documents', 'POST', { filename: 'd.md', markdown: '# D\n\n第一行。\n' }, undefined, auth);
+    const short = created.body.shortId;
+    await request(app, `/api/service/documents/${short}/revisions`, 'POST', { baseVersion: 1, markdown: '# D\n\n第二行。\n' }, undefined, auth);
+
+    const diff = await request(app, `/api/service/documents/${short}/diff?from=1&to=2`);
+    assert.equal(diff.status, 200);
+    assert.equal(diff.body.stats.removed, 1);
+    assert.equal(diff.body.stats.added, 1);
+    assert.ok(diff.body.ops.some(op => op.type === 'delete' && op.lines.includes('第一行。')));
+    assert.ok(diff.body.ops.some(op => op.type === 'insert' && op.lines.includes('第二行。')));
+
+    const versions = await request(app, `/api/service/documents/${short}?include=versions`);
+    assert.equal(versions.status, 200);
+    assert.equal(versions.body.versions.length, 2);
+    assert.equal(versions.body.shortId, short);
+    assert.equal((await request(app, `/api/service/documents/${short}/diff?from=1&to=99`)).status, 404);
+  } finally { await app.close(); }
+});
+
 test('editing a version carries images forward', async () => {
   const app = await launch(tempDir());
   try {

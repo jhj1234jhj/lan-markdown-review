@@ -6,6 +6,7 @@
     review.py submit 方案.md --token $REVIEW_TOKEN
     review.py latest  r7k2m9qd --out 最新稿.md
     review.py comments r7k2m9qd
+    review.py diff r7k2m9qd --from 1 --to 3
     review.py list --account hjh --since 2026-11-01
 
 token 也可以通过环境变量 REVIEW_TOKEN 提供，服务地址用 REVIEW_BASE（默认 http://127.0.0.1:6767）。
@@ -184,6 +185,35 @@ def cmd_comments(args):
             print(f"   ↳ {reply['author']}：{reply['body']}")
 
 
+def cmd_diff(args):
+    params = {}
+    if args.from_version:
+        params["from"] = args.from_version
+    if args.to_version:
+        params["to"] = args.to_version
+    query = f"?{urllib.parse.urlencode(params)}" if params else ""
+    result, _ = request(args.base, "GET", f"/api/service/documents/{urllib.parse.quote(args.ref)}/diff{query}")
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(f"v{result['from']['version']} → v{result['to']['version']} · +{result['stats']['added']} 行 / −{result['stats']['removed']} 行")
+    ops, index = result["ops"], 0
+    while index < len(ops):
+        if ops[index]["type"] == "equal":
+            index += 1
+            continue
+        run = []
+        while index < len(ops) and ops[index]["type"] != "equal":
+            run.append(ops[index])
+            index += 1
+        # 同一处替换先列删除，再列新增，读起来更接近 git diff
+        ordered = [op for op in run if op["type"] == "delete"] + [op for op in run if op["type"] == "insert"]
+        for op in ordered:
+            marker = "+" if op["type"] == "insert" else "-"
+            for line in op.get("lines", []):
+                print(f"{marker} {line}")
+
+
 def cmd_list(args):
     params = {}
     if args.account:
@@ -242,6 +272,12 @@ def main():
     comments.add_argument("ref", help="短 id 或完整 id")
     comments.add_argument("--version", type=int, help="指定版本，默认最新")
     comments.set_defaults(func=cmd_comments)
+
+    diff = sub.add_parser("diff", parents=[common], help="查看两个版本之间的修改记录")
+    diff.add_argument("ref", help="短 id 或完整 id")
+    diff.add_argument("--from", dest="from_version", type=int, help="起始版本，默认 1")
+    diff.add_argument("--to", dest="to_version", type=int, help="结束版本，默认最新")
+    diff.set_defaults(func=cmd_diff)
 
     listing = sub.add_parser("list", parents=[common], help="列出文档，可按账号和时间过滤")
     listing.add_argument("--account", help="按账号过滤")
