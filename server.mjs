@@ -341,8 +341,24 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
             else changed.push([Math.max(1, newLine - 1), newLine + 1]);
           }
           const hitChanged = line => Boolean(line) && changed.some(([start, end]) => line >= start && line < end);
-          const comments = stmt('SELECT id, source_line FROM comments WHERE doc_id=? AND version=?').all(id, target);
-          const kept = comments.filter(comment => !comment.source_line || !hitChanged(comment.source_line)).map(comment => comment.id);
+          // 宽松判定：行号落在改动范围，但引用文字在旧版里仍然存在，也保留。
+          const normalize = value => String(value || '')
+            .replace(/```[\s\S]*?```/g, ' ')
+            .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+            .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+            .replace(/[`*_~#>|]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+          const beforeText = normalize(before.markdown);
+          const quoteStillExists = quote => {
+            const text = normalize(quote);
+            return Boolean(text) && beforeText.includes(text);
+          };
+          const comments = stmt('SELECT id, quote, source_line FROM comments WHERE doc_id=? AND version=?').all(id, target);
+          const kept = comments.filter(comment => {
+            if (!comment.source_line || !hitChanged(comment.source_line)) return true;
+            return quoteStillExists(comment.quote);
+          }).map(comment => comment.id);
           transaction(() => {
             for (const commentId of kept) stmt('UPDATE comments SET version=?, undone_from=? WHERE id=?').run(target - 1, target, commentId);
             stmt('DELETE FROM comments WHERE doc_id=? AND version=?').run(id, target);

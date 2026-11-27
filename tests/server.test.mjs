@@ -131,6 +131,26 @@ test('undo keeps comments on unchanged paragraphs and redo brings them back', as
   } finally { await app.close(); }
 });
 
+test('undo keeps comments whose quoted text still exists in the older version', async () => {
+  const app = await launch(tempDir());
+  try {
+    const session = await request(app, '/api/session', 'POST', { name: '宽松批注者' });
+    const cookie = session.headers.get('set-cookie').split(';')[0];
+    const created = await request(app, '/api/documents', 'POST', { filename: 'd.md', markdown: '# A\n\n第一段。\n\n第二段。\n' }, cookie);
+    const id = created.body.id;
+    await request(app, `/api/documents/${id}/revisions`, 'POST', { baseVersion: 1, markdown: '# A\n\n第一段。\n\n第二段改。\n' }, cookie);
+
+    // 行号在改动行上，但「第二段」这几个字在旧版里仍然存在
+    assert.equal((await request(app, `/api/documents/${id}/comments`, 'POST',
+      { version: 2, body: '关于第二段', quote: '第二段', selectors: [{ type: 'TextQuoteSelector', exact: '第二段' }], sourceLine: 5 }, cookie)).status, 201);
+
+    const undone = await request(app, `/api/documents/${id}/revisions?version=2`, 'DELETE', undefined, cookie);
+    assert.equal(undone.body.keptComments, 1);
+    assert.equal(undone.body.removedComments, 0);
+    assert.equal((await request(app, `/api/documents/${id}/comments?v=1`)).body.length, 1);
+  } finally { await app.close(); }
+});
+
 test('editing a version carries images forward', async () => {
   const app = await launch(tempDir());
   try {
