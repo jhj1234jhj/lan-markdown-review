@@ -59,6 +59,7 @@ async function openDocument(id, version, { replace = false } = {}) {
   $('document-filename').textContent = doc.filename; $('document-date').textContent = `${shortDate(doc.revision.created)} · ${doc.revision.author}`;
   $('download-source').href = `/api/documents/${id}/source?v=${state.version}`;
   $('version-select').innerHTML = doc.versions.map(v => `<option value="${v.version}"${v.version === state.version ? ' selected' : ''}>v${v.version}${v.version === doc.latest ? ' · 最新版本' : ''}${v.open_count ? ` · ${v.open_count} 条未批注` : ''}</option>`).join('');
+  updateVersionButtons();
   $('version-notice').hidden = state.version === doc.latest;
   $('version-notice').textContent = `你正在查看 v${state.version}。最新为 v${doc.latest}，可通过版本菜单切换；本页批注属于 v${state.version}。`;
   $('reading-pane').scrollTop = 0; renderLibrary(); renderComments();
@@ -139,9 +140,14 @@ function renderDiffControls() {
   if (!versions.some(v => v.version === state.diffBase)) state.diffBase = null;
   toggle.checked = Boolean(state.diffBase);
   toggle.disabled = !versions.length;
-  select.innerHTML = versions.map(v => `<option value="${v.version}">对比 v${v.version}</option>`).join('');
+  const earliest = versions[versions.length - 1]?.version, previous = versions[0]?.version;
+  select.innerHTML = versions.map(v => {
+    const note = v.version === earliest ? ' · 最初版本' : v.version === previous ? ' · 上一版' : '';
+    return `<option value="${v.version}">v${v.version}${note}</option>`;
+  }).join('');
   select.hidden = !versions.length;
-  select.value = String(state.diffBase || (versions[0]?.version ?? ''));
+  // 手动打开「修改记录」时默认对比最初版本；编辑/回退后会自动带上刚改的那一版。
+  select.value = String(state.diffBase || earliest || '');
 }
 function renderOutline() {
   const headings = [...$('document-content').querySelectorAll('h1,h2,h3')];
@@ -437,6 +443,48 @@ function busyForm(form, fn) {
   return Promise.resolve().then(fn).finally(() => { delete form.dataset.busy; if (button) button.disabled = false; });
 }
 
+function updateVersionButtons() {
+  if (!state.doc) return;
+  const latest = state.doc.latest;
+  $('undo-version').disabled = latest <= 1;
+  // 只有当最新版内容与上一版之前那版相同（说明刚做过回退）时，「恢复」才可用。
+  const latestHash = state.doc.versions.find(v => v.version === latest)?.hash;
+  const beforeUndo = state.doc.versions.find(v => v.version === latest - 2);
+  $('redo-version').disabled = !(latestHash && beforeUndo && beforeUndo.hash === latestHash);
+}
+async function restoreVersion(version) {
+  requireDocument();
+  const latest = state.doc.latest;
+  if (version === latest) throw new Error('这已经是当前版本');
+  if (version < 1 || version > latest) throw new Error('版本号无效');
+  const source = await api(`/api/documents/${state.doc.id}?v=${version}`);
+  const result = await api(`/api/documents/${state.doc.id}/revisions`, {
+    method: 'POST',
+    body: { baseVersion: latest, markdown: source.revision.markdown, filename: state.doc.filename, sourcePath: source.revision.source_path },
+  });
+  state.diffBase = latest;
+  await loadLibrary();
+  await openDocument(state.doc.id, result.version);
+  toast(`已恢复 v${version} 的内容，保存为 v${result.version}`);
+}
+function undoVersion() {
+  requireDocument();
+  if (state.doc.latest <= 1) throw new Error('没有更早的版本可以回退');
+  return restoreVersion(state.doc.latest - 1);
+}
+function redoVersion() {
+  requireDocument();
+  if ($('redo-version').disabled) throw new Error('没有可恢复的修改');
+  return restoreVersion(state.doc.latest - 1);
+}
+function openHistory() {
+  requireDocument();
+  $('version-list').innerHTML = state.doc.versions.map(v => `<li class="${v.version === state.version ? 'current' : ''}">
+    <div class="version-main"><strong>v${v.version}</strong><span class="version-meta">${date(v.created)} · ${esc(v.author)}</span>${v.version === state.doc.latest ? '<span class="version-tag">最新</span>' : ''}${v.open_count ? `<span class="count-badge">${v.open_count}</span>` : ''}</div>
+    <button class="text-button" data-restore="${v.version}" ${v.version === state.version ? 'disabled' : ''}>恢复到此版本</button>
+  </li>`).join('');
+  $('history-dialog').showModal();
+}
 function openEditor() {
   requireDocument();
   if (state.version !== state.doc.latest) throw new Error('请先切换到最新版本再编辑');
@@ -501,6 +549,15 @@ $('identity-form').addEventListener('submit', run(async e => {
 $('import-document').addEventListener('click', () => withUser(() => openImport('new')));
 $('upload-version').addEventListener('click', () => withUser(() => openImport('revision')));
 $('edit-document').addEventListener('click', () => withUser(openEditor));
+$('undo-version').addEventListener('click', run(undoVersion));
+$('redo-version').addEventListener('click', run(redoVersion));
+$('history-button').addEventListener('click', run(openHistory));
+$('version-list').addEventListener('click', run(async e => {
+  const button = e.target.closest('[data-restore]');
+  if (!button) return;
+  $('history-dialog').close();
+  await restoreVersion(Number(button.dataset.restore));
+}));
 $('editor-markdown').addEventListener('input', e => { $('editor-count').textContent = `${e.target.value.length} 字符`; });
 $('editor-form').addEventListener('submit', run(async e => {
   e.preventDefault();

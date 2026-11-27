@@ -76,3 +76,16 @@
 .diff-del{background:#fbe0e0;color:#8f3b3b;text-decoration:line-through;border-radius:2px}
 .markdown-body.diff-mode.diff-compact .diff-del{display:none}
 .markdown-body.diff-mode.diff-compact .diff-ins{background:none;border-bottom:2px solid #7fb894;border-radius:0}
+
+/* 版本操作与版本记录 */
+.version-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:2px 10px}
+.version-actions .text-button{font-size:12px}
+.version-actions .text-button:disabled{color:#b9c0cc;cursor:not-allowed;text-decoration:none}
+.version-list{list-style:none;margin:14px 0 0;padding:0;max-height:46vh;overflow:auto}
+.version-list li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 4px;border-bottom:1px solid #eef1f6}
+.version-list li.current{background:#fafaff}
+.version-main{display:flex;align-items:center;gap:8px;font-size:13px;color:#5c6880;min-width:0}
+.version-main strong{font-weight:650;color:#2f3a4f}
+.version-meta{font-size:12px;color:#8a94a8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.version-tag{font-size:11px;color:#4f46e5;background:#efeefe;border-radius:999px;padding:1px 7px}
+.version-list .text-button:disabled{color:#c2c8d4;cursor:not-allowed;text-decoration:none}
