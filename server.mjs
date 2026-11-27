@@ -140,20 +140,23 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
     });
     return { id, shortId, version: 1, title, url: `/d/${shortId}` };
   }
+  const maxVersion = id => stmt('SELECT COALESCE(MAX(version),0) AS version FROM revisions WHERE doc_id=?').get(id).version;
   function addRevision(doc, body, user) {
     const latest = docById(doc.id).latest;
     if (body.baseVersion !== undefined && body.baseVersion !== null && body.baseVersion !== latest) fail(409, '已有新版本，请刷新后重新上传');
-    if (hash(body.markdown || '') === revision(doc.id, latest).hash) fail(409, '文档内容与最新版本相同，无需重复上传');
+    if (hash(body.markdown || '') === revision(doc.id, latest).hash) fail(409, '文档内容与当前版本相同，无需重复上传');
+    // 版本号取历史最大值 +1：回退只移动当前指针，不会把旧版本号空出来复用。
+    const next = Math.max(maxVersion(doc.id), latest) + 1;
     transaction(() => {
-      storeRevision(doc.id, latest + 1, body, user.name);
-      // 只改正文、没带图片时，沿用上一版的图片，避免图片在新版本里丢失。
+      storeRevision(doc.id, next, body, user.name);
+      // 只改正文、没带图片时，沿用当前版本的图片，避免图片在新版本里丢失。
       if (body.assets === undefined) {
-        stmt('INSERT OR REPLACE INTO assets(doc_id,version,path,mime,bytes) SELECT doc_id,?,path,mime,bytes FROM assets WHERE doc_id=? AND version=?').run(latest + 1, doc.id, latest);
+        stmt('INSERT OR REPLACE INTO assets(doc_id,version,path,mime,bytes) SELECT doc_id,?,path,mime,bytes FROM assets WHERE doc_id=? AND version=?').run(next, doc.id, latest);
       }
-      stmt('UPDATE documents SET latest=?,updated=? WHERE id=?').run(latest + 1, now(), doc.id);
+      stmt('UPDATE documents SET latest=?,updated=? WHERE id=?').run(next, now(), doc.id);
     });
     notify(doc.id, 'documents');
-    return { id: doc.id, shortId: doc.short_id, version: latest + 1, url: `/d/${doc.short_id}` };
+    return { id: doc.id, shortId: doc.short_id, version: next, url: `/d/${doc.short_id}` };
   }
   const ownerOf = doc => doc.owner_id ? stmt('SELECT id, account, name FROM users WHERE id=?').get(doc.owner_id) || null : null;
   const toTimestamp = value => {
@@ -321,6 +324,14 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
           res.on('close', () => { clearInterval(heartbeat); subscribers.delete(res); }); return;
         }
         if (!action && method === 'GET') return json(res, { ...doc, revision: revision(id, version), versions: stmt(`SELECT r.version,r.created,r.author,r.hash, (SELECT COUNT(*) FROM comments c WHERE c.doc_id=r.doc_id AND c.version=r.version AND c.status='pending') AS open_count FROM revisions r WHERE r.doc_id=? ORDER BY version DESC`).all(id) });
+        if (action === 'checkout' && method === 'POST') {
+          const body = await readBody(req), target = Number(body.version);
+          if (!Number.isSafeInteger(target) || target < 1) fail(400, '版本号无效');
+          revision(id, target);
+          stmt('UPDATE documents SET latest=?,updated=? WHERE id=?').run(target, now(), id);
+          notify(id, 'documents');
+          return json(res, { id, shortId: doc.short_id, latest: target });
+        }
         if (action === 'diff' && method === 'GET') {
           const rawFrom = url.searchParams.get('from'), rawTo = url.searchParams.get('to');
           const from = rawFrom ? Number(rawFrom) : Math.max(1, doc.latest - 1);

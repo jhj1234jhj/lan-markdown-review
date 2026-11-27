@@ -74,6 +74,33 @@ test('invalid input is rejected atomically; cross-origin writes and anonymous wr
   } finally { await app.close(); }
 });
 
+test('checkout moves the current version pointer without adding a revision', async () => {
+  const app = await launch(tempDir());
+  try {
+    const session = await request(app, '/api/session', 'POST', { name: '切换者' });
+    const cookie = session.headers.get('set-cookie').split(';')[0];
+    const created = await request(app, '/api/documents', 'POST', { filename: 'v.md', markdown: '# 一\n' }, cookie);
+    const id = created.body.id;
+    const v2 = await request(app, `/api/documents/${id}/revisions`, 'POST', { baseVersion: 1, markdown: '# 二\n' }, cookie);
+    assert.equal(v2.body.version, 2);
+
+    const back = await request(app, `/api/documents/${id}/checkout`, 'POST', { version: 1 }, cookie);
+    assert.equal(back.status, 200);
+    assert.equal(back.body.latest, 1);
+    assert.equal((await request(app, `/api/documents/${id}`)).body.latest, 1);
+
+    const forward = await request(app, `/api/documents/${id}/checkout`, 'POST', { version: 2 }, cookie);
+    assert.equal(forward.body.latest, 2);
+
+    // 指针回到 v1 后再编辑，新版本号取历史最大值 +1，不会覆盖 v2
+    await request(app, `/api/documents/${id}/checkout`, 'POST', { version: 1 }, cookie);
+    const v3 = await request(app, `/api/documents/${id}/revisions`, 'POST', { baseVersion: 1, markdown: '# 三\n' }, cookie);
+    assert.equal(v3.body.version, 3);
+    assert.equal((await request(app, `/api/documents/${id}`)).body.versions.length, 3);
+    assert.equal((await request(app, `/api/documents/${id}/checkout`, 'POST', { version: 99 }, cookie)).status, 404);
+  } finally { await app.close(); }
+});
+
 test('editing a version carries images forward', async () => {
   const app = await launch(tempDir());
   try {
