@@ -43,8 +43,20 @@
           <div class="version-tools"><label class="sr-only" for="version-select">文档版本</label><select id="version-select"></select><button class="text-button" id="upload-version">上传新版本</button></div>
         </div>
         <div id="version-notice" class="notice" hidden></div>
+        <div class="view-tools" id="view-tools">
+          <div class="segmented" role="group" aria-label="显示模式">
+            <button type="button" data-display="all" class="on">全部显示</button>
+            <button type="button" data-display="compact">精简显示</button>
+          </div>
+          <label class="diff-switch"><input type="checkbox" id="diff-toggle"> 修改记录</label>
+          <select id="diff-base" aria-label="对比版本" hidden></select>
+          <span id="diff-summary" class="diff-summary" hidden></span>
+        </div>
         <div class="reading-hint"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z"/><path d="M8 8h8M8 12h5"/></svg>选中正文中的文字，即可添加批注<span>Ctrl + Enter 提交</span></div>
-        <article id="document-content" class="markdown-body" aria-label="文档正文"></article>
+        <div class="document-body">
+          <div id="margin-markers" class="margin-markers" aria-hidden="true"></div>
+          <article id="document-content" class="markdown-body" aria-label="文档正文"></article>
+        </div>
         <div class="document-end">— 文档结束 —</div>
       </main>
       <aside class="review-pane" aria-label="批注和讨论">

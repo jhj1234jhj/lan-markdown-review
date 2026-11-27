@@ -41,6 +41,12 @@ test('two reviewers, live notifications, replies, exports, revision isolation an
     assert.equal((await request(app,`/api/documents/${id}/comments?v=2`)).body.length,0);
     assert.equal((await request(app,`/api/documents/${id}/comments?v=1`)).body.length,1);
     assert.equal((await request(app,`/api/documents/${id}/revisions`,'POST',{baseVersion:1,markdown:'错误并发覆盖'},b)).status,409);
+    const diff = await request(app,`/api/documents/${id}/diff?from=1&to=2`); assert.equal(diff.status,200);
+    assert.equal(diff.body.from.version,1); assert.equal(diff.body.to.version,2);
+    assert.ok(diff.body.stats.removed >= 1 && diff.body.stats.added >= 1);
+    assert.ok(diff.body.ops.some(op => op.type === 'delete' && op.lines.includes('这一段需要讨论。')));
+    assert.ok(diff.body.ops.some(op => op.type === 'insert' && op.lines.includes('已补充验收标准。')));
+    assert.equal((await request(app,`/api/documents/${id}/diff?from=1&to=99`)).status,404);
     sse.abort(); await reader.cancel().catch(()=>{}); reader=null;
     await app.close(); app = await launch(dir);
     const persisted = await request(app,`/api/documents/${id}/comments?v=1`); assert.equal(persisted.body[0].replies[0].author,'审阅者乙'); assert.equal(persisted.body[0].status,'pending');

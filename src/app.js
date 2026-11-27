@@ -2,7 +2,7 @@ import { renderDocument, escapeHTML as esc } from './render.js';
 import { describeSelection, anchorComment } from './anchoring.js';
 
 const $ = id => document.getElementById(id);
-const state = { user: null, documents: [], doc: null, version: null, comments: [], filter: 'pending', selected: null, ranges: new Map(), addresses: [], stream: null, pending: null, importMode: 'new', files: [], sourceFile: null, loading: 0, replies: new Set() };
+const state = { user: null, documents: [], doc: null, version: null, comments: [], filter: 'pending', selected: null, ranges: new Map(), addresses: [], stream: null, pending: null, importMode: 'new', files: [], sourceFile: null, loading: 0, replies: new Set(), displayMode: 'all', diffBase: null, diff: null };
 let toastTimer, onIdentity, exportEditing = null;
 const date = value => new Date(value).toLocaleString('zh-CN', { month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false });
 const shortDate = value => new Date(value).toLocaleDateString('zh-CN', { month:'long',day:'numeric' });
@@ -62,9 +62,10 @@ async function openDocument(id, version, { replace = false } = {}) {
   $('version-notice').hidden = state.version === doc.latest;
   $('version-notice').textContent = `你正在查看 v${state.version}。最新为 v${doc.latest}，可通过版本菜单切换；本页批注属于 v${state.version}。`;
   $('reading-pane').scrollTop = 0; renderLibrary(); renderComments();
-  const headings = await renderDocument($('document-content'), doc.revision.markdown, { docId: id, version: state.version, sourcePath: doc.revision.source_path });
+  renderDiffControls();
+  await renderBody();
   if (token !== state.loading) return;
-  $('outline').innerHTML = headings.filter(h => h.tagName !== 'H1').map(h => `<a href="#${h.id}" class="level-${h.tagName.slice(1)}">${esc(h.textContent)}</a>`).join('');
+  renderOutline();
   await loadComments();
   if (token !== state.loading) return;
   const stream = new EventSource(`/api/documents/${id}/events`); state.stream = stream;
@@ -86,6 +87,133 @@ async function openDocument(id, version, { replace = false } = {}) {
   stream.onerror = () => connection(false);
   const commentId = sessionStorage.getItem('review-focus-comment');
   if (commentId) { sessionStorage.removeItem('review-focus-comment'); focusComment(commentId); }
+}
+/* ---------- 正文显示模式（全部 / 精简）与修改记录（版本对比） ---------- */
+function clearHighlights() {
+  if (!CSS.highlights) return;
+  for (const info of Object.values(STATUS)) CSS.highlights.delete(info.highlight);
+  CSS.highlights.delete('review-active');
+}
+function buildMarginMarkers() {
+  const host = $('margin-markers'), body = document.querySelector('.document-body'), article = $('document-content');
+  if (!host || !body || !article) return;
+  host.replaceChildren();
+  if (state.displayMode !== 'compact' || state.diff || !state.doc) return;
+  const base = body.getBoundingClientRect(), articleRect = article.getBoundingClientRect();
+  const left = Math.round(articleRect.left - base.left - 18), lanes = new Map();
+  for (const comment of state.comments) {
+    const range = state.ranges.get(comment.id);
+    if (!range) continue;
+    const rect = range.getClientRects()[0] || range.getBoundingClientRect();
+    const top = Math.round(rect.top - base.top);
+    const lane = lanes.get(Math.round(top / 16)) || 0;
+    lanes.set(Math.round(top / 16), lane + 1);
+    const marker = document.createElement('button');
+    marker.type = 'button';
+    marker.className = `margin-marker ${statusOf(comment.status).className}`;
+    marker.style.left = `${left}px`;
+    marker.style.top = `${top + lane * 16}px`;
+    marker.title = `${statusOf(comment.status).label} · ${(comment.quote || '整体建议').slice(0, 40)}`;
+    marker.addEventListener('click', () => focusComment(comment.id));
+    host.append(marker);
+  }
+}
+function applyDisplayMode() {
+  const content = $('document-content');
+  content.classList.toggle('compact', state.displayMode === 'compact' && !state.diff);
+  document.querySelector('.review-pane')?.classList.toggle('diff-mode', Boolean(state.diff));
+  updateHighlights();
+  requestAnimationFrame(buildMarginMarkers);
+}
+function updateDiffSummary(diff) {
+  const node = $('diff-summary');
+  node.hidden = false;
+  node.innerHTML = `v${diff.from.version} → v${diff.to.version} · <b>+${diff.stats.added}</b> 行 / <i>−${diff.stats.removed}</i> 行`;
+}
+function hideDiffSummary() { const node = $('diff-summary'); if (node) node.hidden = true; }
+function renderDiffControls() {
+  const select = $('diff-base'), toggle = $('diff-toggle');
+  const versions = state.doc ? state.doc.versions.filter(v => v.version !== state.version) : [];
+  if (!versions.some(v => v.version === state.diffBase)) state.diffBase = null;
+  toggle.checked = Boolean(state.diffBase);
+  toggle.disabled = !versions.length;
+  select.innerHTML = versions.map(v => `<option value="${v.version}">对比 v${v.version}</option>`).join('');
+  select.hidden = !versions.length;
+  select.value = String(state.diffBase || (versions[0]?.version ?? ''));
+}
+function renderOutline() {
+  const headings = [...$('document-content').querySelectorAll('h1,h2,h3')];
+  $('outline').innerHTML = headings.filter(h => h.tagName !== 'H1').map(h => `<a href="#${h.id}" class="level-${h.tagName.slice(1)}">${esc(h.textContent)}</a>`).join('');
+}
+// 把两个版本的渲染结果按行区间拼回去：新增块标绿、删除块标红。
+function composeDiff(oldRoot, newRoot, ops) {
+  const collect = root => {
+    let last = 1;
+    return [...root.children].map(el => {
+      const value = Number(el.dataset.line);
+      const line = Number.isFinite(value) && value > 0 ? value : last;
+      last = line;
+      return { el, line };
+    });
+  };
+  const groups = ops.map(() => []);
+  const place = (items, side) => {
+    for (const item of items) {
+      const index = ops.findIndex(op => {
+        if (side === 'old') return op.type === 'delete' && item.line >= op.oldStart && item.line < op.oldStart + op.lines.length;
+        if (op.type === 'equal') return item.line >= op.newStart && item.line < op.newStart + op.count;
+        if (op.type === 'insert') return item.line >= op.newStart && item.line < op.newStart + op.lines.length;
+        return false;
+      });
+      if (index >= 0) groups[index].push(item);
+    }
+  };
+  place(collect(newRoot), 'new');
+  place(collect(oldRoot), 'old');
+  // 同一处替换先显示删除、再显示新增，读起来更像 Word 的修订。
+  const order = [];
+  for (let i = 0; i < ops.length; i += 1) {
+    if (ops[i].type === 'equal') { order.push(i); continue; }
+    const run = [];
+    while (i < ops.length && ops[i].type !== 'equal') { run.push(i); i += 1; }
+    i -= 1;
+    order.push(...run.filter(index => ops[index].type === 'delete'), ...run.filter(index => ops[index].type === 'insert'));
+  }
+  const fragment = document.createDocumentFragment();
+  for (const index of order) {
+    const op = ops[index];
+    for (const { el } of groups[index]) {
+      const clone = el.cloneNode(true);
+      clone.removeAttribute('id');
+      if (op.type === 'delete') clone.classList.add('diff-deleted');
+      if (op.type === 'insert') clone.classList.add('diff-inserted');
+      fragment.append(clone);
+    }
+  }
+  return fragment;
+}
+async function renderBody() {
+  const content = $('document-content'), doc = state.doc;
+  state.diff = null;
+  if (state.diffBase) {
+    const [older, diff] = await Promise.all([
+      api(`/api/documents/${doc.id}?v=${state.diffBase}`),
+      api(`/api/documents/${doc.id}/diff?from=${state.diffBase}&to=${state.version}`),
+    ]);
+    state.diff = diff;
+    const oldRoot = document.createElement('div'), newRoot = document.createElement('div');
+    await renderDocument(oldRoot, older.revision.markdown, { docId: doc.id, version: state.diffBase, sourcePath: older.revision.source_path });
+    await renderDocument(newRoot, doc.revision.markdown, { docId: doc.id, version: state.version, sourcePath: doc.revision.source_path });
+    content.replaceChildren(composeDiff(oldRoot, newRoot, diff.ops));
+    content.classList.add('diff-mode');
+    updateDiffSummary(diff);
+  } else {
+    content.classList.remove('diff-mode');
+    await renderDocument(content, doc.revision.markdown, { docId: doc.id, version: state.version, sourcePath: doc.revision.source_path });
+    hideDiffSummary();
+  }
+  [...content.querySelectorAll('h1,h2,h3')].forEach((heading, index) => { heading.id = `heading-${index}`; });
+  applyDisplayMode();
 }
 async function loadComments() {
   if (!state.doc) return;
@@ -109,10 +237,15 @@ function updateHighlights() {
     state.ranges.set(c.id, range);
     buckets[buckets[c.status] ? c.status : 'pending'].push(range);
   }
+  const suppressed = state.displayMode === 'compact' || Boolean(state.diff);
   if (CSS.highlights) {
-    for (const [key, ranges] of Object.entries(buckets)) CSS.highlights.set(STATUS[key].highlight, new Highlight(...ranges));
-    CSS.highlights.set('review-active', new Highlight(...(state.ranges.has(state.selected) ? [state.ranges.get(state.selected)] : [])));
+    if (suppressed) clearHighlights();
+    else {
+      for (const [key, ranges] of Object.entries(buckets)) CSS.highlights.set(STATUS[key].highlight, new Highlight(...ranges));
+      CSS.highlights.set('review-active', new Highlight(...(state.ranges.has(state.selected) ? [state.ranges.get(state.selected)] : [])));
+    }
   }
+  buildMarginMarkers();
 }
 const avatar = name => `<span class="avatar">${esc(name?.slice(0, 1) || '?')}</span>`;
 function renderComments() {
@@ -256,6 +389,25 @@ $('time-filter').addEventListener('change', renderLibrary);
 $('document-list').addEventListener('click', run(async e => { const link = e.target.closest('[data-doc]'); if (link && !e.ctrlKey && !e.metaKey) { e.preventDefault(); $('library').classList.remove('open'); await openDocument(link.dataset.doc); } }));
 $('outline').addEventListener('click', e => { const link = e.target.closest('a'); if (link) { e.preventDefault(); $(link.hash.slice(1))?.scrollIntoView({ behavior:'smooth', block:'start' }); $('library').classList.remove('open'); } });
 $('version-select').addEventListener('change', run(() => openDocument(state.doc.id, Number($('version-select').value))));
+document.querySelectorAll('[data-display]').forEach(button => button.addEventListener('click', () => {
+  state.displayMode = button.dataset.display;
+  document.querySelectorAll('[data-display]').forEach(b => b.classList.toggle('on', b === button));
+  applyDisplayMode();
+}));
+$('diff-toggle').addEventListener('change', run(async () => {
+  state.diffBase = $('diff-toggle').checked ? Number($('diff-base').value) || null : null;
+  await renderBody();
+  renderOutline();
+  renderComments();
+}));
+$('diff-base').addEventListener('change', run(async () => {
+  if (!$('diff-toggle').checked) return;
+  state.diffBase = Number($('diff-base').value) || null;
+  await renderBody();
+  renderOutline();
+}));
+if (typeof ResizeObserver === 'function') new ResizeObserver(() => buildMarginMarkers()).observe($('document-content'));
+window.addEventListener('resize', () => buildMarginMarkers());
 document.querySelectorAll('[data-filter]').forEach(b => b.addEventListener('click', () => { state.filter = b.dataset.filter; renderComments(); }));
 $('toggle-library').addEventListener('click', () => $('library').classList.toggle('open'));
 $('about-button').addEventListener('click', () => $('about-dialog').showModal());

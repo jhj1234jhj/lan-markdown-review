@@ -41,6 +41,11 @@ pnpm start
 
 首页左侧的文档库可以按 **账号** 和 **时间**（今天 / 近 7 天 / 近 30 天）筛选，和搜索框叠加使用；每篇文档下面显示所有者与更新时间。
 
+正文上方还有两个视图开关：
+
+- **全部显示 / 精简显示**：精简时正文不再涂色，只在段落左侧显示状态色点（黄=未批注、绿=同意、红=拒绝），点色点跳到对应批注，类似 Word 的「简单标记」；
+- **修改记录**：选一个旧版本对比，正文按块显示——红色删除线是旧版内容，绿色是新增内容，右侧给出 `+N 行 / −N 行` 的统计。
+
 ## 部署与数据
 
 - 单进程、单文件：文档、批注、图片都在 `data/review.sqlite` 里，**备份就是拷贝 `data/` 整个目录**（连 `-wal`、`-shm` 一起）。
@@ -83,6 +88,10 @@ data/                 运行时数据库（gitignore）
 
 每个文档一条 SSE（`/api/documents/:id/events`），有人新增批注、回复或上传版本时向所有订阅者广播 `update` 事件，前端静默重取。服务是单进程内存广播，配 SQLite WAL，够一个团队局域网使用。
 
+### 修改记录（版本对比）
+
+`/api/documents/:id/diff` 先裁掉两版的公共前后缀，中间用 LCS 逐行比较，输出 `equal` / `insert` / `delete` 片段。前端把旧版和新版**分别渲染成排版好的 DOM**，再按行号把块拼回去：删除的块取自旧 DOM 并加删除线，新增的块取自新 DOM 并标绿，所以对比结果是排过版的 Markdown，而不是纯文本 diff。行数特别大的文档（超过约 150 万格）会退化成整段替换，避免计算出问题。
+
 ## HTTP 接口
 
 浏览器写操作走登录 cookie（`review_session`，HttpOnly），要求 `Origin` 与 Host 一致、带 `X-Review-Request: 1` 头、`Content-Type: application/json`；程序调用改用 `Authorization: Bearer <token>`，不需要 cookie 和这两个校验头。
@@ -101,6 +110,7 @@ data/                 运行时数据库（gitignore）
 | POST | `/api/documents/:id/comments` | `{version, body, quote, selectors, sourceLine?}` |
 | GET | `/api/documents/:id/source?v=` | 下载该版本 Markdown |
 | GET | `/api/documents/:id/export?v=&format=md\|json&status=pending` | 导出意见；`status=pending` 只要未批注的 |
+| GET | `/api/documents/:id/diff?from=&to=` | 两个版本之间的逐行差异（`equal` / `insert` / `delete`） |
 | GET | `/api/documents/:id/assets/:version/:path` | 随文档导入的图片 |
 | PATCH | `/api/comments/:id` | `{status}`：`pending` / `agreed` / `rejected`，或 `{body}` 改自己的批注 |
 | POST | `/api/comments/:id/replies` | `{body}` 回复 |

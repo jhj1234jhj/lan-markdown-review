@@ -21,6 +21,54 @@ const STARTER = '# 欢迎来到共阅\n\n让每一条建议，都回到它所指
 const SHORT_ALPHABET = '23456789abcdefghjkmnpqrstuvwxyz';
 const makeShortId = () => Array.from({ length: 8 }, () => SHORT_ALPHABET[randomInt(SHORT_ALPHABET.length)]).join('');
 
+// 逐行差异：先裁掉公共前后缀，中间做 LCS；太大就退化成整段替换，避免内存爆掉。
+const DIFF_CELL_LIMIT = 1_500_000;
+const mergeDiffOps = ops => {
+  const merged = [];
+  for (const op of ops) {
+    const last = merged[merged.length - 1];
+    if (last && last.type === op.type) {
+      if (op.type === 'equal' && last.newStart + last.count === op.newStart) { last.count += op.count; continue; }
+      if (op.type === 'delete' && last.oldStart + last.lines.length === op.oldStart) { last.lines.push(...op.lines); continue; }
+      if (op.type === 'insert' && last.newStart + last.lines.length === op.newStart) { last.lines.push(...op.lines); continue; }
+    }
+    merged.push(op);
+  }
+  return merged;
+};
+function lineDiff(before, after) {
+  const a = before.split('\n'), b = after.split('\n');
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start += 1;
+  let tail = 0;
+  while (tail < a.length - start && tail < b.length - start && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail += 1;
+  const A = a.slice(start, a.length - tail), B = b.slice(start, b.length - tail), base = start + 1;
+  const ops = [];
+  if (start) ops.push({ type: 'equal', oldStart: 1, newStart: 1, count: start });
+  if (A.length && B.length && A.length * B.length <= DIFF_CELL_LIMIT) {
+    const n = A.length, m = B.length, width = m + 1;
+    const lcs = new Int32Array((n + 1) * width);
+    for (let i = n - 1; i >= 0; i -= 1) {
+      for (let j = m - 1; j >= 0; j -= 1) {
+        lcs[i * width + j] = A[i] === B[j]
+          ? lcs[(i + 1) * width + j + 1] + 1
+          : Math.max(lcs[(i + 1) * width + j], lcs[i * width + j + 1]);
+      }
+    }
+    let i = 0, j = 0;
+    while (i < n || j < m) {
+      if (i < n && j < m && A[i] === B[j]) { ops.push({ type: 'equal', oldStart: base + i, newStart: base + j, count: 1 }); i += 1; j += 1; }
+      else if (j < m && (i === n || lcs[i * width + j + 1] >= lcs[(i + 1) * width + j])) { ops.push({ type: 'insert', newStart: base + j, lines: [B[j]] }); j += 1; }
+      else { ops.push({ type: 'delete', oldStart: base + i, lines: [A[i]] }); i += 1; }
+    }
+  } else {
+    if (A.length) ops.push({ type: 'delete', oldStart: base, lines: A });
+    if (B.length) ops.push({ type: 'insert', newStart: base, lines: B });
+  }
+  if (tail) ops.push({ type: 'equal', oldStart: a.length - tail + 1, newStart: b.length - tail + 1, count: tail });
+  return mergeDiffOps(ops);
+}
+
 export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 'data'), seed = true } = {}) {
   mkdirSync(dataDir, { recursive: true });
   const db = new DatabaseSync(join(dataDir, 'review.sqlite'));
@@ -269,6 +317,23 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
           res.on('close', () => { clearInterval(heartbeat); subscribers.delete(res); }); return;
         }
         if (!action && method === 'GET') return json(res, { ...doc, revision: revision(id, version), versions: stmt(`SELECT r.version,r.created,r.author,r.hash, (SELECT COUNT(*) FROM comments c WHERE c.doc_id=r.doc_id AND c.version=r.version AND c.status='pending') AS open_count FROM revisions r WHERE r.doc_id=? ORDER BY version DESC`).all(id) });
+        if (action === 'diff' && method === 'GET') {
+          const rawFrom = url.searchParams.get('from'), rawTo = url.searchParams.get('to');
+          const from = rawFrom ? Number(rawFrom) : Math.max(1, doc.latest - 1);
+          const to = rawTo ? Number(rawTo) : doc.latest;
+          if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 1 || to < 1) fail(400, '版本号无效');
+          const before = revision(id, from), after = revision(id, to);
+          const ops = lineDiff(before.markdown, after.markdown);
+          return json(res, {
+            from: { version: from, author: before.author, created: before.created, hash: before.hash },
+            to: { version: to, author: after.author, created: after.created, hash: after.hash },
+            stats: {
+              added: ops.reduce((sum, op) => sum + (op.type === 'insert' ? op.lines.length : 0), 0),
+              removed: ops.reduce((sum, op) => sum + (op.type === 'delete' ? op.lines.length : 0), 0),
+            },
+            ops,
+          });
+        }
         if (action === 'revisions' && method === 'POST') {
           const user = requireUser(req);
           return json(res, addRevision(doc, await readBody(req), user), 201);
