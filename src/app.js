@@ -147,7 +147,117 @@ function renderOutline() {
   const headings = [...$('document-content').querySelectorAll('h1,h2,h3')];
   $('outline').innerHTML = headings.filter(h => h.tagName !== 'H1').map(h => `<a href="#${h.id}" class="level-${h.tagName.slice(1)}">${esc(h.textContent)}</a>`).join('');
 }
-// 把两个版本的渲染结果按行区间拼回去：新增块标绿、删除块标红。
+// 词级 diff：中文按字、英文按词、空白/标点单独成 token，只标真正改动的部分。
+const TOKEN_PATTERN = /[\u4e00-\u9fff]|[A-Za-z0-9_]+|\s+|[^\s]/g;
+function tokenizeText(text) {
+  const tokens = [];
+  TOKEN_PATTERN.lastIndex = 0;
+  for (let match = TOKEN_PATTERN.exec(text); match; match = TOKEN_PATTERN.exec(text)) tokens.push(match[0]);
+  return tokens;
+}
+function diffTokens(a, b) {
+  const n = a.length, m = b.length, width = m + 1;
+  if (n * m > 400000) return null;
+  const lcs = new Int32Array((n + 1) * width);
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      lcs[i * width + j] = a[i] === b[j]
+        ? lcs[(i + 1) * width + j + 1] + 1
+        : Math.max(lcs[(i + 1) * width + j], lcs[i * width + j + 1]);
+    }
+  }
+  const segments = [];
+  const push = (type, text) => {
+    const last = segments[segments.length - 1];
+    if (last && last.type === type) last.text += text;
+    else segments.push({ type, text });
+  };
+  let i = 0, j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) { push('equal', a[i]); i += 1; j += 1; }
+    else if (j < m && (i === n || lcs[i * width + j + 1] >= lcs[(i + 1) * width + j])) { push('insert', b[j]); j += 1; }
+    else { push('delete', a[i]); i += 1; }
+  }
+  // 同一处替换里让删除排在新增前面，读起来更接近 Word 的顺序。
+  const ordered = [];
+  for (let index = 0; index < segments.length;) {
+    if (segments[index].type === 'equal') { ordered.push(segments[index]); index += 1; continue; }
+    const run = [];
+    while (index < segments.length && segments[index].type !== 'equal') { run.push(segments[index]); index += 1; }
+    ordered.push(...run.filter(segment => segment.type === 'delete'), ...run.filter(segment => segment.type === 'insert'));
+  }
+  return ordered;
+}
+function textMap(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [], starts = [];
+  let text = '';
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) { nodes.push(node); starts.push(text.length); text += node.nodeValue; }
+  return { nodes, starts, text };
+}
+function locateOffset(map, offset) {
+  for (let i = map.nodes.length - 1; i >= 0; i -= 1) {
+    if (map.starts[i] <= offset) return { node: map.nodes[i], offset: offset - map.starts[i] };
+  }
+  return null;
+}
+function wrapRange(root, start, end, tag, className) {
+  if (end <= start) return;
+  const map = textMap(root);
+  for (let i = map.nodes.length - 1; i >= 0; i -= 1) {
+    const node = map.nodes[i], base = map.starts[i], length = node.nodeValue.length;
+    const from = Math.max(start, base) - base, to = Math.min(end, base + length) - base;
+    if (to <= from) continue;
+    if (to < length) node.splitText(to);
+    let target = node;
+    if (from > 0) target = node.splitText(from);
+    const wrapper = document.createElement(tag);
+    wrapper.className = className;
+    target.parentNode.insertBefore(wrapper, target);
+    wrapper.appendChild(target);
+  }
+}
+function insertDeletion(root, offset, text) {
+  if (!text.trim()) return;
+  const deletion = document.createElement('del');
+  deletion.className = 'diff-del';
+  deletion.textContent = text;
+  const map = textMap(root);
+  const hit = locateOffset(map, offset);
+  if (!hit) { root.appendChild(deletion); return; }
+  const { node } = hit;
+  const local = hit.offset;
+  // 别把删除线塞进绿色的 <ins> 里：在它前面或后面断开。
+  const inside = node.parentElement?.closest('.diff-ins');
+  if (inside) {
+    if (local === 0) { inside.parentNode.insertBefore(deletion, inside); return; }
+    if (local >= node.nodeValue.length) { inside.parentNode.insertBefore(deletion, inside.nextSibling); return; }
+  }
+  let anchor = node;
+  if (local > 0) anchor = node.splitText(local);
+  anchor.parentNode.insertBefore(deletion, anchor);
+}
+// 把「整段替换」细化成词级标记：新增的词标绿，删掉的词原位划掉，其余保持原样。
+function buildInlineDiff(oldBlock, newBlock) {
+  if (oldBlock.tagName !== newBlock.tagName) return null;
+  const segments = diffTokens(tokenizeText(oldBlock.textContent), tokenizeText(newBlock.textContent));
+  if (!segments) return null;
+  const changed = segments.reduce((sum, seg) => sum + (seg.type === 'equal' ? 0 : seg.text.length), 0);
+  const total = oldBlock.textContent.length + newBlock.textContent.length || 1;
+  if (!changed || changed / total > 0.85) return null;
+  const clone = newBlock.cloneNode(true);
+  let position = 0;
+  const inserts = [], deletes = [];
+  for (const segment of segments) {
+    if (segment.type === 'equal') position += segment.text.length;
+    else if (segment.type === 'insert') { inserts.push([position, position + segment.text.length]); position += segment.text.length; }
+    else deletes.push([position, segment.text]);
+  }
+  for (const [start, end] of inserts.sort((a, b) => b[0] - a[0])) wrapRange(clone, start, end, 'ins', 'diff-ins');
+  for (const [offset, text] of deletes.sort((a, b) => b[0] - a[0])) insertDeletion(clone, offset, text);
+  return clone;
+}
+// 把两个版本的渲染结果按行区间拼回去：新增块标绿、删除块标红，能配对的块做词级对比。
 function composeDiff(oldRoot, newRoot, ops) {
   const collect = root => {
     let last = 1;
@@ -172,25 +282,31 @@ function composeDiff(oldRoot, newRoot, ops) {
   };
   place(collect(newRoot), 'new');
   place(collect(oldRoot), 'old');
-  // 同一处替换先显示删除、再显示新增，读起来更像 Word 的修订。
-  const order = [];
+  const fragment = document.createDocumentFragment();
+  const appendBlock = (item, className) => {
+    const clone = item.el.cloneNode(true);
+    clone.removeAttribute('id');
+    if (className) clone.classList.add(className);
+    fragment.append(clone);
+  };
   for (let i = 0; i < ops.length; i += 1) {
-    if (ops[i].type === 'equal') { order.push(i); continue; }
+    if (ops[i].type === 'equal') { groups[i].forEach(item => appendBlock(item)); continue; }
     const run = [];
     while (i < ops.length && ops[i].type !== 'equal') { run.push(i); i += 1; }
     i -= 1;
-    order.push(...run.filter(index => ops[index].type === 'delete'), ...run.filter(index => ops[index].type === 'insert'));
-  }
-  const fragment = document.createDocumentFragment();
-  for (const index of order) {
-    const op = ops[index];
-    for (const { el } of groups[index]) {
-      const clone = el.cloneNode(true);
-      clone.removeAttribute('id');
-      if (op.type === 'delete') clone.classList.add('diff-deleted');
-      if (op.type === 'insert') clone.classList.add('diff-inserted');
-      fragment.append(clone);
+    const removed = [], added = [];
+    for (const index of run) (ops[index].type === 'delete' ? removed : added).push(...groups[index]);
+    // 同一位置的块先试词级对比；配不上（类型不同或改动过大）就退回整块红/绿。
+    while (removed.length && added.length) {
+      const inline = buildInlineDiff(removed[0].el, added[0].el);
+      if (!inline) break;
+      inline.removeAttribute('id');
+      inline.classList.add('diff-inline');
+      fragment.append(inline);
+      removed.shift(); added.shift();
     }
+    removed.forEach(item => appendBlock(item, 'diff-deleted'));
+    added.forEach(item => appendBlock(item, 'diff-inserted'));
   }
   return fragment;
 }

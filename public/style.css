@@ -70,3 +70,9 @@
 /* 修改记录的紧凑视图：隐藏旧内容，只留改动处的细边 */
 .markdown-body.diff-mode.diff-compact .diff-deleted{display:none}
 .markdown-body.diff-mode.diff-compact .diff-inserted{background:none;box-shadow:inset 2px 0 #7fb894;padding:0 0 0 6px;margin-left:-6px;border-radius:0}
+
+/* 词级修订：只标改动的词，不铺满整段 */
+.diff-ins{background:#d9f2e1;text-decoration:none;border-radius:2px}
+.diff-del{background:#fbe0e0;color:#8f3b3b;text-decoration:line-through;border-radius:2px}
+.markdown-body.diff-mode.diff-compact .diff-del{display:none}
+.markdown-body.diff-mode.diff-compact .diff-ins{background:none;border-bottom:2px solid #7fb894;border-radius:0}
