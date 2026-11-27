@@ -481,8 +481,9 @@ async function undoVersion() {
   const stack = redoStack();
   stack.push({ markdown: source.revision.markdown });
   setRedoStack(stack);
+  let undone;
   try {
-    await api(`/api/documents/${state.doc.id}/revisions?version=${latest}`, { method: 'DELETE' });
+    undone = await api(`/api/documents/${state.doc.id}/revisions?version=${latest}`, { method: 'DELETE' });
   } catch (error) {
     stack.pop(); setRedoStack(stack);
     throw error;
@@ -491,7 +492,9 @@ async function undoVersion() {
   await loadLibrary();
   await openDocument(state.doc.id);
   setTimeout(() => flashLine(line), 180);
-  toast(`已回退，删除 v${latest}；现在最新是 v${latest - 1}`);
+  const kept = undone?.keptComments || 0, removed = undone?.removedComments || 0;
+  const note = kept || removed ? `（保留 ${kept} 条批注${removed ? `，删除 ${removed} 条与改动相关的` : ''}）` : '';
+  toast(`已回退，删除 v${latest}；现在最新是 v${latest - 1}${note}`);
 }
 async function redoVersion() {
   requireDocument();
@@ -501,7 +504,7 @@ async function redoVersion() {
   const before = state.doc.latest;
   await api(`/api/documents/${state.doc.id}/revisions`, {
     method: 'POST',
-    body: { baseVersion: before, markdown: last.markdown, filename: state.doc.filename, sourcePath: state.doc.revision.source_path },
+    body: { baseVersion: before, markdown: last.markdown, filename: state.doc.filename, sourcePath: state.doc.revision.source_path, restoreUndone: true },
   });
   stack.pop(); setRedoStack(stack);
   state.diffBase = null;

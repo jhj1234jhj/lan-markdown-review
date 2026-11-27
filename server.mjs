@@ -91,6 +91,7 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
     ['users', 'token_hash', 'ALTER TABLE users ADD COLUMN token_hash TEXT'],
     ['documents', 'short_id', 'ALTER TABLE documents ADD COLUMN short_id TEXT'],
     ['documents', 'owner_id', 'ALTER TABLE documents ADD COLUMN owner_id TEXT REFERENCES users(id)'],
+    ['comments', 'undone_from', 'ALTER TABLE comments ADD COLUMN undone_from INTEGER'],
   ]) if (!tableColumns(table).includes(column)) db.exec(ddl);
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS users_account ON users(account) WHERE account IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS documents_short ON documents(short_id) WHERE short_id IS NOT NULL;
@@ -329,14 +330,28 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
           const target = Number(url.searchParams.get('version'));
           if (!Number.isSafeInteger(target) || target < 2) fail(400, '至少保留第一个版本');
           if (target !== maxVersion(id)) fail(409, '只能撤销最新的版本');
+          // 只删锚在被改段落上的批注；没受影响的批注迁移到回退后的版本。
+          const before = revision(id, target - 1), after = revision(id, target);
+          const ops = lineDiff(before.markdown, after.markdown);
+          let newLine = 1;
+          const changed = [];
+          for (const op of ops) {
+            if (op.type === 'equal') { newLine += op.count; continue; }
+            if (op.type === 'insert') changed.push([op.newStart, op.newStart + op.lines.length]);
+            else changed.push([Math.max(1, newLine - 1), newLine + 1]);
+          }
+          const hitChanged = line => Boolean(line) && changed.some(([start, end]) => line >= start && line < end);
+          const comments = stmt('SELECT id, source_line FROM comments WHERE doc_id=? AND version=?').all(id, target);
+          const kept = comments.filter(comment => !comment.source_line || !hitChanged(comment.source_line)).map(comment => comment.id);
           transaction(() => {
+            for (const commentId of kept) stmt('UPDATE comments SET version=?, undone_from=? WHERE id=?').run(target - 1, target, commentId);
             stmt('DELETE FROM comments WHERE doc_id=? AND version=?').run(id, target);
             stmt('DELETE FROM assets WHERE doc_id=? AND version=?').run(id, target);
             stmt('DELETE FROM revisions WHERE doc_id=? AND version=?').run(id, target);
             stmt('UPDATE documents SET latest=?,updated=? WHERE id=?').run(target - 1, now(), id);
           });
           notify(id, 'documents');
-          return json(res, { id, shortId: doc.short_id, latest: target - 1 });
+          return json(res, { id, shortId: doc.short_id, latest: target - 1, keptComments: kept.length, removedComments: comments.length - kept.length });
         }
         if (action === 'diff' && method === 'GET') {
           const rawFrom = url.searchParams.get('from'), rawTo = url.searchParams.get('to');
@@ -356,8 +371,13 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
           });
         }
         if (action === 'revisions' && method === 'POST') {
-          const user = requireUser(req);
-          return json(res, addRevision(doc, await readBody(req), user), 201);
+          const user = requireUser(req), body = await readBody(req);
+          const result = addRevision(doc, body, user);
+          // 「恢复」时把撤销时迁移到旧版本的批注带回来。
+          if (body.restoreUndone) {
+            stmt('UPDATE comments SET version=?, undone_from=NULL WHERE doc_id=? AND undone_from=?').run(result.version, id, result.version);
+          }
+          return json(res, result, 201);
         }
         if (action.startsWith('assets/') && method === 'GET') {
           const parts = action.slice(7).split('/'), v = Number(parts.shift()), assetPath = parts.join('/');

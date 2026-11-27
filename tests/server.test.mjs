@@ -102,6 +102,35 @@ test('undo deletes the latest revision and redo re-adds it', async () => {
   } finally { await app.close(); }
 });
 
+test('undo keeps comments on unchanged paragraphs and redo brings them back', async () => {
+  const app = await launch(tempDir());
+  try {
+    const session = await request(app, '/api/session', 'POST', { name: '批注者' });
+    const cookie = session.headers.get('set-cookie').split(';')[0];
+    const created = await request(app, '/api/documents', 'POST', { filename: 'c.md', markdown: '# A\n\n第一段。\n\n第二段。\n' }, cookie);
+    const id = created.body.id;
+    await request(app, `/api/documents/${id}/revisions`, 'POST', { baseVersion: 1, markdown: '# A\n\n第一段。\n\n第二段改。\n' }, cookie);
+
+    const quoteSelector = exact => [{ type: 'TextQuoteSelector', exact }];
+    assert.equal((await request(app, `/api/documents/${id}/comments`, 'POST', { version: 2, body: '关于第一段', quote: '第一段。', selectors: quoteSelector('第一段。'), sourceLine: 3 }, cookie)).status, 201);
+    assert.equal((await request(app, `/api/documents/${id}/comments`, 'POST', { version: 2, body: '关于第二段', quote: '第二段改。', selectors: quoteSelector('第二段改。'), sourceLine: 5 }, cookie)).status, 201);
+
+    const undone = await request(app, `/api/documents/${id}/revisions?version=2`, 'DELETE', undefined, cookie);
+    assert.equal(undone.status, 200);
+    assert.equal(undone.body.keptComments, 1);
+    assert.equal(undone.body.removedComments, 1);
+    const afterUndo = await request(app, `/api/documents/${id}/comments?v=1`);
+    assert.equal(afterUndo.body.length, 1);
+    assert.equal(afterUndo.body[0].body, '关于第一段');
+
+    // 恢复 v2：迁移到 v1 的批注跟着回来
+    await request(app, `/api/documents/${id}/revisions`, 'POST', { baseVersion: 1, markdown: '# A\n\n第一段。\n\n第二段改。\n', restoreUndone: true }, cookie);
+    const afterRedo = await request(app, `/api/documents/${id}/comments?v=2`);
+    assert.equal(afterRedo.body.length, 1);
+    assert.equal(afterRedo.body[0].body, '关于第一段');
+  } finally { await app.close(); }
+});
+
 test('editing a version carries images forward', async () => {
   const app = await launch(tempDir());
   try {
