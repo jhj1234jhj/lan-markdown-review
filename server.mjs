@@ -160,6 +160,14 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
     return { id: doc.id, shortId: doc.short_id, version: next, url: `/d/${doc.short_id}` };
   }
   const ownerOf = doc => doc.owner_id ? stmt('SELECT id, account, name FROM users WHERE id=?').get(doc.owner_id) || null : null;
+  const isAdmin = user => Boolean(user) && [`${user.account || ''}`.toLowerCase(), `${user.name || ''}`.toLowerCase()].includes('admin');
+  const firstAuthor = docId => stmt('SELECT author FROM revisions WHERE doc_id=? ORDER BY version LIMIT 1').get(docId)?.author;
+  const canDeleteDocument = (doc, user) => {
+    if (!user) return false;
+    if (isAdmin(user)) return true;
+    if (doc.owner_id) return doc.owner_id === user.id;
+    return firstAuthor(doc.id) === user.name;
+  };
   const toTimestamp = value => {
     if (!value) return null;
     const date = /^\d+$/.test(String(value)) ? new Date(Number(value)) : new Date(value);
@@ -235,7 +243,7 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
         const port = server.address()?.port || 6767;
         const addresses = Object.values(networkInterfaces()).flat().filter(n => n.family === 'IPv4' && !n.internal && /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(n.address)).map(n => `http://${n.address}:${port}`);
         addresses.sort((a, b) => Number(b.includes('192.168.')) - Number(a.includes('192.168.')));
-        return json(res, { addresses, port, user: currentUser(req) || null });
+        return json(res, { addresses, port, user: currentUser(req) || null, admin: isAdmin(currentUser(req)) });
       }
       if (path === '/api/session' && method === 'POST') {
         const b = await readBody(req), name = text(b.name, '姓名', 40); let user = currentUser(req);
@@ -323,6 +331,19 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
           res.write('event: ready\ndata: {}\n\n'); subscribers.set(res, id);
           const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 20000);
           res.on('close', () => { clearInterval(heartbeat); subscribers.delete(res); }); return;
+        }
+        if (!action && method === 'DELETE') {
+          const user = requireUser(req);
+          if (!canDeleteDocument(doc, user)) fail(403, '只有文档作者或管理员可以删除');
+          transaction(() => {
+            stmt('DELETE FROM replies WHERE comment_id IN (SELECT id FROM comments WHERE doc_id=?)').run(id);
+            stmt('DELETE FROM comments WHERE doc_id=?').run(id);
+            stmt('DELETE FROM assets WHERE doc_id=?').run(id);
+            stmt('DELETE FROM revisions WHERE doc_id=?').run(id);
+            stmt('DELETE FROM documents WHERE id=?').run(id);
+          });
+          notify(id, 'documents');
+          return json(res, { ok: true, id, shortId: doc.short_id });
         }
         if (!action && method === 'GET') return json(res, { ...doc, revision: revision(id, version), versions: stmt(`SELECT r.version,r.created,r.author,r.hash, (SELECT COUNT(*) FROM comments c WHERE c.doc_id=r.doc_id AND c.version=r.version AND c.status='pending') AS open_count FROM revisions r WHERE r.doc_id=? ORDER BY version DESC`).all(id) });
         if (action === 'revisions' && method === 'DELETE') {

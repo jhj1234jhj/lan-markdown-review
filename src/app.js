@@ -12,7 +12,12 @@ async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type':'application/json', 'X-Review-Request':'1', ...options.headers }, body: options.body === undefined ? undefined : JSON.stringify(options.body) });
   const body = await response.json(); if (!response.ok) throw new Error(body.error || '请求失败'); return body;
 }
-function setUser(user) { state.user = user; $('user-name').textContent = user?.name || '填写姓名'; $('user-avatar').textContent = user?.name?.slice(0, 1) || '访'; }
+function setUser(user, admin = false) {
+  state.user = user;
+  state.admin = Boolean(admin) || /^admin$/i.test(user?.name || '');
+  $('user-name').textContent = user?.name ? `${user.name}${state.admin ? ' · 管理员' : ''}` : '填写姓名';
+  $('user-avatar').textContent = user?.name?.slice(0, 1) || '访';
+}
 function showIdentity(next) { onIdentity = next; $('identity-name').value = state.user?.name || ''; $('identity-dialog').showModal(); setTimeout(() => $('identity-name').focus(), 20); }
 function withUser(fn) { if (state.user) return run(fn)(); showIdentity(fn); }
 function requireDocument() { if (!state.doc) throw new Error('请先导入或打开一份文档'); }
@@ -39,11 +44,18 @@ function visibleDocuments() {
     return true;
   });
 }
+const canDeleteDocument = d => Boolean(state.user) && (state.admin || (d.owner_id ? d.owner_id === state.user.id : d.owner_name === state.user.name));
 function renderLibrary() {
   renderOwnerOptions();
   const visible = visibleDocuments();
   $('document-count').textContent = visible.length === state.documents.length ? state.documents.length : `${visible.length}/${state.documents.length}`;
-  $('document-list').innerHTML = visible.map(d => `<a class="document-link${d.id === state.doc?.id ? ' active' : ''}" href="/d/${d.short_id || d.id}" data-doc="${d.short_id || d.id}">${docIcon}<span class="doc-name">${esc(d.title)}</span>${d.open_count ? `<span class="count-badge">${d.open_count}</span>` : ''}<span class="doc-meta">${esc(ownerLabel(d))} · ${date(d.updated)}</span></a>`).join('') || '<p class="helper">没有匹配的文档</p>';
+  $('document-list').innerHTML = visible.map(d => {
+    const ref = d.short_id || d.id, active = d.id === state.doc?.id;
+    return `<div class="document-row${active ? ' active' : ''}">
+      <a class="document-link${active ? ' active' : ''}" href="/d/${ref}" data-doc="${ref}">${docIcon}<span class="doc-name">${esc(d.title)}</span>${d.open_count ? `<span class="count-badge">${d.open_count}</span>` : ''}<span class="doc-meta">${esc(ownerLabel(d))} · ${date(d.updated)}</span></a>
+      ${canDeleteDocument(d) ? `<button type="button" class="doc-delete" data-delete="${ref}" data-title="${esc(d.title)}" title="删除文档" aria-label="删除文档"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>` : ''}
+    </div>`;
+  }).join('') || '<p class="helper">没有匹配的文档</p>';
 }
 async function openDocument(id, version, { replace = false } = {}) {
   const token = ++state.loading;
@@ -531,6 +543,28 @@ function openEditor() {
   $('editor-dialog').showModal();
   setTimeout(() => { area.focus(); area.setSelectionRange(0, 0); }, 30);
 }
+async function deleteDocument(ref, title) {
+  if (!window.confirm(`删除「${title}」？文档的所有版本和批注都会一起删除，无法恢复。`)) return;
+  const removing = Boolean(state.doc && (state.doc.short_id === ref || state.doc.id === ref));
+  await api(`/api/documents/${ref}`, { method: 'DELETE' });
+  if (removing) {
+    state.stream?.close(); state.stream = null;
+    state.doc = null; state.comments = []; state.ranges.clear();
+    $('document-content').innerHTML = '';
+    $('document-title').textContent = '文档已删除';
+    $('toolbar-title').textContent = '团队空间';
+    $('comments').innerHTML = '';
+    $('outline').innerHTML = '';
+    history.replaceState({}, '', '/');
+  }
+  await loadLibrary();
+  toast('文档已删除');
+  if (!state.doc) {
+    const next = state.documents[0];
+    if (next) await openDocument(next.short_id || next.id, undefined, { replace: true });
+    else $('document-content').innerHTML = '<p class="helper">还没有文档，点左上角「导入文档」开始。</p>';
+  }
+}
 function openImport(mode) {
   if (mode === 'revision') requireDocument();
   state.importMode = mode; state.importTarget = mode === 'revision' ? { id:state.doc.id, baseVersion:state.doc.latest } : null;
@@ -579,7 +613,7 @@ $('identity-button').addEventListener('click', () => showIdentity());
 $('identity-form').addEventListener('submit', run(async e => {
   e.preventDefault(); await busyForm(e.currentTarget, async () => {
     setUser(await api('/api/session', { method:'POST', body:{ name:$('identity-name').value } }));
-    $('identity-dialog').close(); renderComments(); const next = onIdentity; onIdentity = null; if (next) await next();
+    $('identity-dialog').close(); renderLibrary(); renderComments(); const next = onIdentity; onIdentity = null; if (next) await next();
   });
 }));
 $('import-document').addEventListener('click', () => withUser(() => openImport('new')));
@@ -623,7 +657,11 @@ $('import-form').addEventListener('submit', run(async e => {
 $('document-search').addEventListener('input', renderLibrary);
 $('owner-filter').addEventListener('change', renderLibrary);
 $('time-filter').addEventListener('change', renderLibrary);
-$('document-list').addEventListener('click', run(async e => { const link = e.target.closest('[data-doc]'); if (link && !e.ctrlKey && !e.metaKey) { e.preventDefault(); $('library').classList.remove('open'); await openDocument(link.dataset.doc); } }));
+$('document-list').addEventListener('click', run(async e => {
+  const remove = e.target.closest('[data-delete]');
+  if (remove) { e.preventDefault(); e.stopPropagation(); await deleteDocument(remove.dataset.delete, remove.dataset.title); return; }
+  const link = e.target.closest('[data-doc]'); if (link && !e.ctrlKey && !e.metaKey) { e.preventDefault(); $('library').classList.remove('open'); await openDocument(link.dataset.doc); }
+}));
 $('outline').addEventListener('click', e => { const link = e.target.closest('a'); if (link) { e.preventDefault(); $(link.hash.slice(1))?.scrollIntoView({ behavior:'smooth', block:'start' }); $('library').classList.remove('open'); } });
 $('version-label').addEventListener('click', () => run(openHistory)());
 document.querySelectorAll('[data-display]').forEach(button => button.addEventListener('click', () => {
@@ -702,7 +740,7 @@ window.addEventListener('online', () => state.doc && run(loadComments)());
 document.addEventListener('visibilitychange', () => { if (!document.hidden && state.doc) run(async () => { await loadLibrary(); await loadComments(); })(); });
 
 run(async () => {
-  const info = await api('/api/info'); setUser(info.user); state.addresses = info.addresses; connection(true);
+  const info = await api('/api/info'); state.admin = Boolean(info.admin); setUser(info.user, info.admin); state.addresses = info.addresses; connection(true);
   await loadLibrary();
   const match = location.pathname.match(/^\/d\/([0-9a-z-]{8,64})$/i), params = new URLSearchParams(location.search);
   if (params.get('comment')) sessionStorage.setItem('review-focus-comment', params.get('comment'));

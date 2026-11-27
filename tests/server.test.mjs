@@ -151,6 +151,30 @@ test('undo keeps comments whose quoted text still exists in the older version', 
   } finally { await app.close(); }
 });
 
+test('document deletion is limited to the author and admin', async () => {
+  const app = await launch(tempDir());
+  try {
+    const alice = await request(app, '/api/session', 'POST', { name: 'alice' });
+    const a = alice.headers.get('set-cookie').split(';')[0];
+    const bob = await request(app, '/api/session', 'POST', { name: 'bob' });
+    const b = bob.headers.get('set-cookie').split(';')[0];
+    const admin = await request(app, '/api/session', 'POST', { name: 'admin' });
+    const adm = admin.headers.get('set-cookie').split(';')[0];
+
+    const created = await request(app, '/api/documents', 'POST', { filename: 'x.md', markdown: '# X\n' }, a);
+    const id = created.body.id;
+    assert.equal((await request(app, `/api/documents/${id}`, 'DELETE', undefined, b)).status, 403);
+    assert.equal((await request(app, '/api/documents', 'GET', undefined, undefined, { Cookie: b })).body.length, 1);
+    assert.equal((await request(app, `/api/documents/${id}`, 'DELETE', undefined, a)).status, 200);
+    assert.equal((await request(app, '/api/documents')).body.length, 0);
+
+    // 管理员可以删除别人的文档
+    const created2 = await request(app, '/api/documents', 'POST', { filename: 'y.md', markdown: '# Y\n' }, a);
+    assert.equal((await request(app, `/api/documents/${created2.body.id}`, 'DELETE', undefined, adm)).status, 200);
+    assert.equal((await request(app, '/api/documents')).body.length, 0);
+  } finally { await app.close(); }
+});
+
 test('editing a version carries images forward', async () => {
   const app = await launch(tempDir());
   try {
