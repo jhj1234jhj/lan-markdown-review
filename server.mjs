@@ -324,13 +324,19 @@ export function createApp({ dataDir = process.env.REVIEW_DATA_DIR || join(ROOT, 
           res.on('close', () => { clearInterval(heartbeat); subscribers.delete(res); }); return;
         }
         if (!action && method === 'GET') return json(res, { ...doc, revision: revision(id, version), versions: stmt(`SELECT r.version,r.created,r.author,r.hash, (SELECT COUNT(*) FROM comments c WHERE c.doc_id=r.doc_id AND c.version=r.version AND c.status='pending') AS open_count FROM revisions r WHERE r.doc_id=? ORDER BY version DESC`).all(id) });
-        if (action === 'checkout' && method === 'POST') {
-          const body = await readBody(req), target = Number(body.version);
-          if (!Number.isSafeInteger(target) || target < 1) fail(400, '版本号无效');
-          revision(id, target);
-          stmt('UPDATE documents SET latest=?,updated=? WHERE id=?').run(target, now(), id);
+        if (action === 'revisions' && method === 'DELETE') {
+          requireUser(req);
+          const target = Number(url.searchParams.get('version'));
+          if (!Number.isSafeInteger(target) || target < 2) fail(400, '至少保留第一个版本');
+          if (target !== maxVersion(id)) fail(409, '只能撤销最新的版本');
+          transaction(() => {
+            stmt('DELETE FROM comments WHERE doc_id=? AND version=?').run(id, target);
+            stmt('DELETE FROM assets WHERE doc_id=? AND version=?').run(id, target);
+            stmt('DELETE FROM revisions WHERE doc_id=? AND version=?').run(id, target);
+            stmt('UPDATE documents SET latest=?,updated=? WHERE id=?').run(target - 1, now(), id);
+          });
           notify(id, 'documents');
-          return json(res, { id, shortId: doc.short_id, latest: target });
+          return json(res, { id, shortId: doc.short_id, latest: target - 1 });
         }
         if (action === 'diff' && method === 'GET') {
           const rawFrom = url.searchParams.get('from'), rawTo = url.searchParams.get('to');

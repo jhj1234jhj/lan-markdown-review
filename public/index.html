@@ -40,7 +40,7 @@
     <div class="review-layout">
       <main class="reading-pane" id="reading-pane">
         <div class="document-head"><div><div class="eyebrow">MARKDOWN REVIEW</div><h1 id="document-title">正在打开文档…</h1><div class="document-meta"><span id="document-filename"></span><span id="document-date"></span><a id="download-source" href="#">下载原文</a></div></div>
-          <div class="version-tools"><label class="sr-only" for="version-select">文档版本</label><select id="version-select"></select><div class="version-actions"><button class="text-button" id="undo-version" title="回到上一版的内容，并保存为新版本">↶ 回退</button><button class="text-button" id="redo-version" title="恢复刚才回退掉的修改">↷ 恢复</button><button class="text-button" id="history-button">版本记录</button><button class="text-button" id="edit-document">编辑</button><button class="text-button" id="upload-version">上传新版本</button></div></div>
+          <div class="version-tools"><span id="version-label" class="version-label">v1</span><div class="version-actions"><button class="text-button" id="undo-version" title="删除最新一版，回到上一版">↶ 回退</button><button class="text-button" id="redo-version" title="把刚回退掉的那一版加回来">↷ 恢复</button><button class="text-button" id="history-button">版本记录</button><button class="text-button" id="edit-document">编辑</button><button class="text-button" id="upload-version">上传新版本</button></div></div>
         </div>
         <div id="version-notice" class="notice" hidden></div>
         <div class="view-tools" id="view-tools">
@@ -82,7 +82,7 @@
 
 <dialog id="export-dialog" class="modal compact"><div class="modal-heading"><h2>导出评审意见</h2><button data-close class="close-button" aria-label="关闭">×</button></div><p class="muted">包含引用原文、批注作者、讨论回复和处理状态，可交给 Codex 继续修改。</p><label for="export-scope">导出范围</label><select id="export-scope"><option value="pending">当前版本 · 未批注意见</option><option value="all">当前版本 · 全部意见</option></select><div class="export-options"><a id="export-markdown" class="export-option" href="#"><strong>Markdown 文档 <span>推荐</span></strong><small>方便阅读，直接交给 Codex</small></a><a id="export-json" class="export-option" href="#"><strong>JSON 数据</strong><small>保留文字定位信息，便于程序处理</small></a></div></dialog>
 
-<dialog id="history-dialog" class="modal compact"><div class="modal-heading"><h2>版本记录</h2><button type="button" data-close class="close-button" aria-label="关闭">×</button></div><p class="muted">每次编辑、回退或上传都会生成新版本，旧版本不会丢失；恢复某一版同样是追加一个新版本。</p><ol id="version-list" class="version-list"></ol></dialog>
+<dialog id="history-dialog" class="modal compact"><div class="modal-heading"><h2>版本记录</h2><button type="button" data-close class="close-button" aria-label="关闭">×</button></div><p class="muted">编辑或上传会追加版本；回退会删除最新一版，恢复会把它加回来。版本号始终连续。</p><ol id="version-list" class="version-list"></ol></dialog>
 
 <dialog id="about-dialog" class="modal compact"><div class="modal-heading"><h2>共阅 · 局域网文档评审</h2><button data-close class="close-button" aria-label="关闭">×</button></div><p>导入 Markdown → 分享链接 → 划词批注 → 讨论处理 → 导出意见。</p><p class="muted">文档和批注保存在服务器电脑。每次上传新版本都会保留旧正文及其批注；批注不会自动迁移到新版本。</p><p class="muted">姓名不是身份认证，能访问此服务的局域网成员可以阅读和参与评审。</p><p class="helper">文字定位采用 Hypothesis 开源组件；本地协作服务与界面为独立实现，不连接 Hypothesis 云服务。</p></dialog>
 </body></html>

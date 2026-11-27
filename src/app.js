@@ -58,10 +58,9 @@ async function openDocument(id, version, { replace = false } = {}) {
   $('toolbar-title').textContent = doc.title; $('document-title').textContent = doc.title;
   $('document-filename').textContent = doc.filename; $('document-date').textContent = `${shortDate(doc.revision.created)} · ${doc.revision.author}`;
   $('download-source').href = `/api/documents/${id}/source?v=${state.version}`;
-  $('version-select').innerHTML = doc.versions.map(v => `<option value="${v.version}"${v.version === state.version ? ' selected' : ''}>v${v.version}${v.version === doc.latest ? ' · 当前版本' : ''}${v.open_count ? ` · ${v.open_count} 条未批注` : ''}</option>`).join('');
+  $('version-label').textContent = `v${doc.latest}`;
   updateVersionButtons();
-  $('version-notice').hidden = state.version === doc.latest;
-  $('version-notice').textContent = `你正在查看 v${state.version}。当前版本为 v${doc.latest}，可通过版本菜单切换；本页批注属于 v${state.version}。`;
+  $('version-notice').hidden = true;
   $('reading-pane').scrollTop = 0; renderLibrary(); renderComments();
   renderDiffControls();
   await renderBody();
@@ -76,11 +75,10 @@ async function openDocument(id, version, { replace = false } = {}) {
     await loadLibrary();
     if (event.docId === state.doc?.id) {
       if (event.type === 'documents') {
-        const fresh = await api(`/api/documents/${id}?v=${state.version}`);
+        const fresh = await api(`/api/documents/${id}`);
         state.doc.latest = fresh.latest; state.doc.versions = fresh.versions;
-        $('version-select').innerHTML = fresh.versions.map(v => `<option value="${v.version}"${v.version === state.version ? ' selected' : ''}>v${v.version}${v.version === fresh.latest ? ' · 当前版本' : ''}</option>`).join('');
-        $('version-notice').hidden = state.version === fresh.latest;
-        $('version-notice').textContent = `已有新版本 v${fresh.latest}。本轮评审仍固定在 v${state.version}，可通过版本菜单切换。`;
+        $('version-label').textContent = `v${fresh.latest}`;
+        updateVersionButtons();
       }
       await loadComments();
     }
@@ -436,41 +434,87 @@ function busyForm(form, fn) {
   return Promise.resolve().then(fn).finally(() => { delete form.dataset.busy; if (button) button.disabled = false; });
 }
 
-function maxVersionOf() {
-  return Math.max(...(state.doc ? state.doc.versions.map(v => v.version) : [0]));
+const redoStoreKey = () => (state.doc ? `review:redo:${state.doc.id}` : null);
+function redoStack() {
+  const key = redoStoreKey();
+  if (!key) return [];
+  try { const value = JSON.parse(sessionStorage.getItem(key) || '[]'); return Array.isArray(value) ? value : []; } catch { return []; }
+}
+function setRedoStack(stack) {
+  const key = redoStoreKey();
+  if (!key) return;
+  if (stack.length) sessionStorage.setItem(key, JSON.stringify(stack)); else sessionStorage.removeItem(key);
 }
 function updateVersionButtons() {
   if (!state.doc) return;
-  const max = maxVersionOf();
   $('undo-version').disabled = state.doc.latest <= 1;
-  $('redo-version').disabled = state.doc.latest >= max;
+  $('redo-version').disabled = redoStack().length === 0;
 }
-// 回退/恢复只移动「当前版本」指针，不新增版本；编辑和上传才会新增。
-async function checkoutVersion(version) {
+function firstChangeLine(diff, side) {
+  let oldLine = 1, newLine = 1;
+  for (const op of diff.ops) {
+    if (op.type === 'equal') { oldLine += op.count; newLine += op.count; continue; }
+    if (op.type === 'delete') return side === 'old' ? op.oldStart : newLine;
+    return side === 'old' ? oldLine : op.newStart;
+  }
+  return null;
+}
+function flashLine(line) {
+  if (!line) return;
+  const blocks = [...$('document-content').querySelectorAll('[data-line]')].filter(el => Number(el.dataset.line) > 0);
+  if (!blocks.length) return;
+  const target = blocks.find(el => Number(el.dataset.line) >= line) || blocks[blocks.length - 1];
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  target.classList.add('change-flash');
+  setTimeout(() => target.classList.remove('change-flash'), 2400);
+}
+// 回退＝删掉最新一版（像 Word 撤销），恢复＝把它加回来；版本号始终连续。
+async function undoVersion() {
   requireDocument();
   const latest = state.doc.latest;
-  if (version === latest) throw new Error('这已经是当前版本');
-  if (!Number.isSafeInteger(version) || version < 1 || version > maxVersionOf()) throw new Error('版本号无效');
-  await api(`/api/documents/${state.doc.id}/checkout`, { method: 'POST', body: { version } });
+  if (latest <= 1) throw new Error('已经是第一个版本');
+  const [source, diff] = await Promise.all([
+    api(`/api/documents/${state.doc.id}?v=${latest}`),
+    api(`/api/documents/${state.doc.id}/diff?from=${latest - 1}&to=${latest}`),
+  ]);
+  const line = firstChangeLine(diff, 'old');
+  const stack = redoStack();
+  stack.push({ markdown: source.revision.markdown });
+  setRedoStack(stack);
+  try {
+    await api(`/api/documents/${state.doc.id}/revisions?version=${latest}`, { method: 'DELETE' });
+  } catch (error) {
+    stack.pop(); setRedoStack(stack);
+    throw error;
+  }
+  state.diffBase = null;
   await loadLibrary();
-  await openDocument(state.doc.id, version);
-  updateVersionButtons();
-  toast(`已切换到 v${version}`);
+  await openDocument(state.doc.id);
+  setTimeout(() => flashLine(line), 180);
+  toast(`已回退，删除 v${latest}；现在最新是 v${latest - 1}`);
 }
-function undoVersion() {
+async function redoVersion() {
   requireDocument();
-  if (state.doc.latest <= 1) throw new Error('已经是第一个版本');
-  return checkoutVersion(state.doc.latest - 1);
-}
-function redoVersion() {
-  requireDocument();
-  return checkoutVersion(state.doc.latest + 1);
+  const stack = redoStack();
+  const last = stack[stack.length - 1];
+  if (!last) throw new Error('没有可恢复的修改');
+  const before = state.doc.latest;
+  await api(`/api/documents/${state.doc.id}/revisions`, {
+    method: 'POST',
+    body: { baseVersion: before, markdown: last.markdown, filename: state.doc.filename, sourcePath: state.doc.revision.source_path },
+  });
+  stack.pop(); setRedoStack(stack);
+  state.diffBase = null;
+  await loadLibrary();
+  const diff = await api(`/api/documents/${state.doc.id}/diff?from=${before}&to=${before + 1}`);
+  await openDocument(state.doc.id);
+  setTimeout(() => flashLine(firstChangeLine(diff, 'new')), 180);
+  toast('已恢复刚才的修改');
 }
 function openHistory() {
   requireDocument();
   $('version-list').innerHTML = state.doc.versions.map(v => `<li class="${v.version === state.doc.latest ? 'current' : ''}">
     <div class="version-main"><strong>v${v.version}</strong><span class="version-meta">${date(v.created)} · ${esc(v.author)}</span>${v.version === state.doc.latest ? '<span class="version-tag">当前</span>' : ''}${v.open_count ? `<span class="count-badge">${v.open_count}</span>` : ''}</div>
-    <button class="text-button" data-restore="${v.version}" ${v.version === state.doc.latest ? 'disabled' : ''}>设为当前版本</button>
   </li>`).join('');
   $('history-dialog').showModal();
 }
@@ -541,12 +585,6 @@ $('edit-document').addEventListener('click', () => withUser(openEditor));
 $('undo-version').addEventListener('click', run(undoVersion));
 $('redo-version').addEventListener('click', run(redoVersion));
 $('history-button').addEventListener('click', run(openHistory));
-$('version-list').addEventListener('click', run(async e => {
-  const button = e.target.closest('[data-restore]');
-  if (!button) return;
-  $('history-dialog').close();
-  await checkoutVersion(Number(button.dataset.restore));
-}));
 $('editor-markdown').addEventListener('input', e => { $('editor-count').textContent = `${e.target.value.length} 字符`; });
 $('editor-form').addEventListener('submit', run(async e => {
   e.preventDefault();
@@ -560,6 +598,7 @@ $('editor-form').addEventListener('submit', run(async e => {
       body: { baseVersion: previous, markdown, filename: state.doc.filename, sourcePath: state.doc.revision.source_path },
     });
     $('editor-dialog').close();
+    setRedoStack([]);
     state.diffBase = 1;
     await loadLibrary();
     await openDocument(state.doc.id, result.version);
@@ -575,7 +614,7 @@ $('import-form').addEventListener('submit', run(async e => {
   e.preventDefault(); await busyForm(e.currentTarget, async () => {
     const body = await importBody(), target = state.importTarget;
     const result = await api(target ? `/api/documents/${target.id}/revisions` : '/api/documents', { method:'POST', body: target ? { ...body, baseVersion:target.baseVersion } : body });
-    $('import-dialog').close(); await loadLibrary(); await openDocument(result.id, result.version); toast(target ? '新版本已保存，旧版批注完整保留' : '文档已导入，可以开始评审了');
+    $('import-dialog').close(); setRedoStack([]); await loadLibrary(); await openDocument(result.id, result.version); toast(target ? '新版本已保存，旧版批注完整保留' : '文档已导入，可以开始评审了');
   });
 }));
 $('document-search').addEventListener('input', renderLibrary);
@@ -583,7 +622,7 @@ $('owner-filter').addEventListener('change', renderLibrary);
 $('time-filter').addEventListener('change', renderLibrary);
 $('document-list').addEventListener('click', run(async e => { const link = e.target.closest('[data-doc]'); if (link && !e.ctrlKey && !e.metaKey) { e.preventDefault(); $('library').classList.remove('open'); await openDocument(link.dataset.doc); } }));
 $('outline').addEventListener('click', e => { const link = e.target.closest('a'); if (link) { e.preventDefault(); $(link.hash.slice(1))?.scrollIntoView({ behavior:'smooth', block:'start' }); $('library').classList.remove('open'); } });
-$('version-select').addEventListener('change', run(() => openDocument(state.doc.id, Number($('version-select').value))));
+$('version-label').addEventListener('click', () => run(openHistory)());
 document.querySelectorAll('[data-display]').forEach(button => button.addEventListener('click', () => {
   state.displayMode = button.dataset.display;
   document.querySelectorAll('[data-display]').forEach(b => b.classList.toggle('on', b === button));

@@ -89,3 +89,8 @@
 .version-meta{font-size:12px;color:#8a94a8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .version-tag{font-size:11px;color:#4f46e5;background:#efeefe;border-radius:999px;padding:1px 7px}
 .version-list .text-button:disabled{color:#c2c8d4;cursor:not-allowed;text-decoration:none}
+
+/* 版本号标签与撤销定位高亮 */
+.version-label{font-size:12px;color:#5c6880;background:#f1f3f8;border:1px solid #e3e8f1;border-radius:999px;padding:3px 10px;white-space:nowrap;cursor:pointer}
+.change-flash{animation:changeFlash 2.4s ease-out;border-radius:6px}
+@keyframes changeFlash{0%{background:#fff3c4;box-shadow:0 0 0 6px #fff3c4}70%{background:#fff8dd;box-shadow:0 0 0 4px #fff8dd}100%{background:transparent;box-shadow:0 0 0 0 transparent}}

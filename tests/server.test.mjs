@@ -74,30 +74,31 @@ test('invalid input is rejected atomically; cross-origin writes and anonymous wr
   } finally { await app.close(); }
 });
 
-test('checkout moves the current version pointer without adding a revision', async () => {
+test('undo deletes the latest revision and redo re-adds it', async () => {
   const app = await launch(tempDir());
   try {
-    const session = await request(app, '/api/session', 'POST', { name: '切换者' });
+    const session = await request(app, '/api/session', 'POST', { name: '撤销者' });
     const cookie = session.headers.get('set-cookie').split(';')[0];
     const created = await request(app, '/api/documents', 'POST', { filename: 'v.md', markdown: '# 一\n' }, cookie);
     const id = created.body.id;
     const v2 = await request(app, `/api/documents/${id}/revisions`, 'POST', { baseVersion: 1, markdown: '# 二\n' }, cookie);
     assert.equal(v2.body.version, 2);
 
-    const back = await request(app, `/api/documents/${id}/checkout`, 'POST', { version: 1 }, cookie);
-    assert.equal(back.status, 200);
-    assert.equal(back.body.latest, 1);
-    assert.equal((await request(app, `/api/documents/${id}`)).body.latest, 1);
+    const undone = await request(app, `/api/documents/${id}/revisions?version=2`, 'DELETE', undefined, cookie);
+    assert.equal(undone.status, 200);
+    assert.equal(undone.body.latest, 1);
+    const afterUndo = await request(app, `/api/documents/${id}`);
+    assert.equal(afterUndo.body.latest, 1);
+    assert.equal(afterUndo.body.versions.length, 1);
 
-    const forward = await request(app, `/api/documents/${id}/checkout`, 'POST', { version: 2 }, cookie);
-    assert.equal(forward.body.latest, 2);
+    // 撤销之后再编辑，版本号从 2 继续，不会跳到 3
+    const again = await request(app, `/api/documents/${id}/revisions`, 'POST', { baseVersion: 1, markdown: '# 二改\n' }, cookie);
+    assert.equal(again.body.version, 2);
 
-    // 指针回到 v1 后再编辑，新版本号取历史最大值 +1，不会覆盖 v2
-    await request(app, `/api/documents/${id}/checkout`, 'POST', { version: 1 }, cookie);
-    const v3 = await request(app, `/api/documents/${id}/revisions`, 'POST', { baseVersion: 1, markdown: '# 三\n' }, cookie);
-    assert.equal(v3.body.version, 3);
-    assert.equal((await request(app, `/api/documents/${id}`)).body.versions.length, 3);
-    assert.equal((await request(app, `/api/documents/${id}/checkout`, 'POST', { version: 99 }, cookie)).status, 404);
+    // 只能撤销最新版；不能撤销到没有版本
+    await request(app, `/api/documents/${id}/revisions`, 'POST', { baseVersion: 2, markdown: '# 三\n' }, cookie);
+    assert.equal((await request(app, `/api/documents/${id}/revisions?version=2`, 'DELETE', undefined, cookie)).status, 409);
+    assert.equal((await request(app, `/api/documents/${id}/revisions?version=1`, 'DELETE', undefined, cookie)).status, 400);
   } finally { await app.close(); }
 });
 
