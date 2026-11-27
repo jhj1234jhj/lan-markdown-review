@@ -238,8 +238,9 @@ function insertDeletion(root, offset, text) {
   anchor.parentNode.insertBefore(deletion, anchor);
 }
 // 把「整段替换」细化成词级标记：新增的词标绿，删掉的词原位划掉，其余保持原样。
+const INLINE_DIFF_TAGS = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE']);
 function buildInlineDiff(oldBlock, newBlock) {
-  if (oldBlock.tagName !== newBlock.tagName) return null;
+  if (oldBlock.tagName !== newBlock.tagName || !INLINE_DIFF_TAGS.has(oldBlock.tagName)) return null;
   const segments = diffTokens(tokenizeText(oldBlock.textContent), tokenizeText(newBlock.textContent));
   if (!segments) return null;
   const changed = segments.reduce((sum, seg) => sum + (seg.type === 'equal' ? 0 : seg.text.length), 0);
