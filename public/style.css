@@ -107,3 +107,12 @@
 .toolbar .diff-switch{font-size:11px;gap:4px}
 .toolbar .diff-summary{font-size:11px;padding:2px 8px;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .toolbar .version-label{font-size:11px;padding:2px 8px;cursor:pointer;flex-shrink:0}
+
+/* 窄屏时工具栏换行，避免按钮被挤出屏幕 */
+@media (max-width: 1320px){
+  .toolbar{height:auto;min-height:76px;flex-wrap:wrap;padding:10px 22px;row-gap:8px}
+  .toolbar .breadcrumb{flex:1 1 100%}
+  .toolbar-actions{flex:0 0 auto;width:100%;justify-content:flex-end;flex-wrap:wrap;overflow:visible;gap:6px 8px}
+}
+.toolbar-group--end{border-right:0;gap:8px}
+
